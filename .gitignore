@@ -1,0 +1,14 @@
+dist/
+/tmp/
+
+# 個人メモ（誤コミット防止）
+.hidari/
+
+# 公開対象外（手元には残すが追跡しない: git rm --cached 済み）
+# - Capture One 社の辞書 PDF は再配布の著作権懸念
+# - feedbacks / superpowers / plans / issues は個人メモや内部作業ファイル
+/docs/Capture One.pdf
+/docs/feedbacks.md
+/docs/superpowers/
+/docs/plans/
+/docs/issues/

@@ -1,0 +1,19 @@
+name: typecheck
+
+# CLAUDE.md 方針に沿い最小構成: push to main と PR で型検査のみ走らせる。
+# osacompile(.scpt 生成) は macOS 依存かつ型が通れば失敗しにくいため CI には含めない。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bunx tsc --noEmit -p tsconfig.json
