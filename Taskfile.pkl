@@ -59,4 +59,12 @@ local install: Task = new {
   cache = false
 }
 
-tasks { emit; compile; build; all; sel; install }
+local test: Task = new {
+  name = "test"
+  description = "pure ロジックのユニットテスト(node --test)"
+  cmd = "node --test test/pure.test.mjs"
+  deps { emit }
+  cache = false
+}
+
+tasks { emit; compile; build; all; sel; install; test }
