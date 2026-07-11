@@ -1,6 +1,11 @@
 // JXA の使用面のみを最小 ambient 宣言する。C1 / System Events の動的ツリーは any 運用。
 declare function delay(seconds: number): void;
 
+// ObjC ブリッジ(ネイティブ file I/O 用)。do shell script は C1 のサンドボックスで
+// -10004 になるためシェルを介さず書き込む。動的なので any 運用。
+declare const $: any;
+declare const ObjC: { import(name: string): void };
+
 interface StandardApp {
   includeStandardAdditions: boolean;
   doShellScript(cmd: string): string;

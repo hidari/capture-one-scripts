@@ -15,9 +15,9 @@ function loadModule() {
   const src = readFileSync(distJs, "utf8");
   const epilogue =
     "\n;globalThis.__M = {" +
-    " stripSuffixes, q, joinPath, parentDir, extOf," +
+    " stripSuffixes, formatStamp, joinPath, parentDir, extOf," +
     " findVariantInIndex, manifestHeaderLines, manifestRowLine, CONFIG };\n";
-  // top-level 実行文(app = Application.currentApplication())が触るものだけスタブ。
+  // 評価用の最小スタブ(現状 top-level に実行文は無いが、将来の追加に備えて用意)。
   const stubApp = { includeStandardAdditions: false };
   const Application = () => stubApp;
   Application.currentApplication = () => stubApp;
@@ -77,9 +77,10 @@ test("extOf: 拡張子を小文字で取り出す / ドット無しは全体", (
   assert.equal(M.extOf("noext"), "noext");
 });
 
-test("q: シングルクォートを安全にエスケープ", () => {
-  assert.equal(M.q("plain"), "'plain'");
-  assert.equal(M.q("it's"), "'it'\\''s'");
+test("formatStamp: ローカル時刻を YYYY-MM-DD HH:MM:SS へ整形(ゼロ埋め)", () => {
+  assert.equal(M.formatStamp(new Date(2026, 6, 12, 3, 58, 21)), "2026-07-12 03:58:21");
+  assert.equal(M.formatStamp(new Date(2026, 0, 1, 0, 0, 0)), "2026-01-01 00:00:00");
+  assert.equal(M.formatStamp(new Date(2026, 11, 31, 23, 59, 9)), "2026-12-31 23:59:09");
 });
 
 test("joinPath / parentDir: パス整形", () => {

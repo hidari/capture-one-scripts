@@ -38,15 +38,15 @@ const CONFIG = {
 };
 
 // ================= 基本ヘルパー =================
-const app = Application.currentApplication();
-app.includeStandardAdditions = true;
 
-function sh(cmd: string): string {
-  return app.doShellScript(cmd);
-}
-
-function q(s: string): string {
-  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+// 追記ログ用のタイムスタンプ(ローカル時刻・YYYY-MM-DD HH:MM:SS)。do shell script は
+// Capture One のサンドボックスで -10004 になるため sh("date") を避けネイティブに生成する。
+function formatStamp(d: Date): string {
+  const p = (n: number): string => (n < 10 ? "0" : "") + n;
+  return (
+    d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+    " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())
+  );
 }
 
 function joinPath(a: string, b: string): string {
@@ -263,18 +263,39 @@ function manifestRowLine(
   return [stamp, target, jpeg === null ? "-" : jpeg, matchlook].join("\t");
 }
 
-function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[]): void {
-  const dest = joinPath(sessionRoot, CONFIG.manifestSubpath);
-  sh("mkdir -p " + q(parentDir(dest)));
-  // ヘッダはファイルが無いときだけ書く(test -f が真なら printf を実行しない)。
-  sh(
-    "test -f " + q(dest) + " || printf '%s' " +
-      q(manifestHeaderLines(sessionRoot)) + " > " + q(dest),
+// ネイティブ(ObjC/Foundation)ファイル I/O。do shell script は Capture One のサンドボックスで
+// シェル起動が禁じられ -10004 になるため、シェルを介さず書き込む(実機の C1 メニュー起動で確認済み)。
+function ensureDir(dir: string): void {
+  $.NSFileManager.defaultManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(
+    $(dir), true, $(), $(),
   );
+}
+
+function fileExists(path: string): boolean {
+  return $.NSFileManager.defaultManager.fileExistsAtPath($(path));
+}
+
+function readTextFile(path: string): string {
+  return String(
+    $.NSString.stringWithContentsOfFileEncodingError($(path), $.NSUTF8StringEncoding, $()),
+  );
+}
+
+function writeTextFile(path: string, text: string): void {
+  $(text).writeToFileAtomicallyEncodingError($(path), true, $.NSUTF8StringEncoding, $());
+}
+
+function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[]): void {
   const body = rows
     .map((r) => manifestRowLine(stamp, r.target, r.jpeg, r.matchlook))
     .join("\n");
-  if (body) sh("printf '%s\\n' " + q(body) + " >> " + q(dest));
+  if (!body) return;
+  ObjC.import("Foundation");
+  const dest = joinPath(sessionRoot, CONFIG.manifestSubpath);
+  ensureDir(parentDir(dest));
+  // 既存があれば読み出して末尾へ追記、無ければヘッダを1回だけ先頭に置く(read-modify-write)。
+  const prefix = fileExists(dest) ? readTextFile(dest) : manifestHeaderLines(sessionRoot);
+  writeTextFile(dest, prefix + body + "\n");
 }
 
 // ================= メイン =================
@@ -282,7 +303,7 @@ function run(): string {
   const C1 = Application(CONFIG.c1AppName);
   const SE = Application("System Events");
   const root = detectSessionRoot(C1);
-  const stamp = sh("date '+%Y-%m-%d %H:%M:%S'").trim();
+  const stamp = formatStamp(new Date());
 
   // currentCollection 切替で選択が失われるため、切替の前に対象を確定する。
   const items = selectedTargetItems(C1);
