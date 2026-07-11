@@ -6,6 +6,9 @@ local tsSources: Listing<String> = new {
   "tsconfig.json"
 }
 
+// C1 Scripts メニューに表示されるラベル(= インストール先ファイル名)。
+local menuName: String = "Apply Match Look from Reference"
+
 local emit: Task = new {
   name = "emit"
   description = "tsc で型検査 + src/dist へ JS 出力"
@@ -29,32 +32,18 @@ local build: Task = new {
   deps { compile }
 }
 
-local all: Task = new {
-  name = "all"
-  description = "Denoised フォルダ全体を処理（Capture One 起動中前提）"
-  cmd = "SCOPE=all MATCHLOOK=$MATCHLOOK osascript -l JavaScript src/dist/matchlook_pipeline.js"
-  deps { emit }
-  cache = false
-  params {
-    new { name = "matchlook"; type = "bool"; default = "true"; description = "Match Look を適用するか" }
-  }
-}
-
 local sel: Task = new {
   name = "sel"
   description = "Capture One で現在選択中の DNG のみ処理"
-  cmd = "SCOPE=sel MATCHLOOK=$MATCHLOOK osascript -l JavaScript src/dist/matchlook_pipeline.js"
+  cmd = "osascript -l JavaScript src/dist/matchlook_pipeline.js"
   deps { emit }
   cache = false
-  params {
-    new { name = "matchlook"; type = "bool"; default = "true"; description = "Match Look を適用するか" }
-  }
 }
 
 local install: Task = new {
   name = "install"
   description = ".scpt を Capture One Scripts フォルダへ配置"
-  cmd = "mkdir -p \"$HOME/Library/Scripts/Capture One Scripts\" && cp src/dist/matchlook_pipeline.scpt \"$HOME/Library/Scripts/Capture One Scripts/matchlook_pipeline.scpt\""
+  cmd = "mkdir -p \"$HOME/Library/Scripts/Capture One Scripts\" && rm -f \"$HOME/Library/Scripts/Capture One Scripts/matchlook_pipeline.scpt\" && cp src/dist/matchlook_pipeline.scpt \"$HOME/Library/Scripts/Capture One Scripts/\(menuName).scpt\""
   deps { compile }
   cache = false
 }
@@ -67,4 +56,4 @@ local test: Task = new {
   cache = false
 }
 
-tasks { emit; compile; build; all; sel; install; test }
+tasks { emit; compile; build; sel; install; test }
