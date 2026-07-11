@@ -16,7 +16,7 @@ function loadModule() {
   const epilogue =
     "\n;globalThis.__M = {" +
     " stripSuffixes, baseNameNoExt, q, joinPath, parentDir," +
-    " findVariantInIndex, CONFIG };\n";
+    " findVariantInIndex, manifestHeaderLines, manifestRowLine, CONFIG };\n";
   // top-level 実行文(app = Application.currentApplication())が触るものだけスタブ。
   const stubApp = { includeStandardAdditions: false };
   const Application = () => stubApp;
@@ -87,4 +87,19 @@ test("joinPath / parentDir: パス整形", () => {
   assert.equal(M.joinPath("/a/b", "c"), "/a/b/c");
   assert.equal(M.parentDir("/a/b/c.txt"), "/a/b");
   assert.equal(M.parentDir("/a/b/"), "/a");
+});
+
+test("manifestHeaderLines: セッション付き 2 行ヘッダ", () => {
+  assert.equal(
+    M.manifestHeaderLines("/S"),
+    "# matchlook pairs log\tsession=/S\ntime\ttarget\tjpeg\tmatchlook\n",
+  );
+});
+
+test("manifestRowLine: タブ区切り / null は '-'", () => {
+  assert.equal(
+    M.manifestRowLine("2026-07-12 01:00:00", "IMG.dng", "IMG.jpg", "applied"),
+    "2026-07-12 01:00:00\tIMG.dng\tIMG.jpg\tapplied",
+  );
+  assert.equal(M.manifestRowLine("T", "IMG.dng", null, "-"), "T\tIMG.dng\t-\t-");
 });
