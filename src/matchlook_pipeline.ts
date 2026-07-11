@@ -63,11 +63,10 @@ function toPOSIX(x: unknown): string | null {
   return String(x);
 }
 
-function baseNameNoExt(path: string): string {
-  const parts = path.split("/");
-  const file = parts[parts.length - 1];
-  const dot = file.lastIndexOf(".");
-  return dot > 0 ? file.substring(0, dot) : file;
+// ファイル名から拡張子(小文字)を取り出す。ドットが無ければ全体を返す(実データの
+// parentImage 名は常に拡張子付き)。同名衝突の拡張子弁別の producer 側の要。
+function extOf(name: string): string {
+  return String(name).split(".").pop()!.toLowerCase();
 }
 
 function stripSuffixes(name: string): string {
@@ -164,7 +163,7 @@ function buildVariantIndex(C1: any): VariantIndex {
     let imgExt = "";
     try {
       n = String(v.name()).toLowerCase();
-      imgExt = String(v.parentImage().name()).split(".").pop()!.toLowerCase();
+      imgExt = extOf(v.parentImage().name());
     } catch (e) {
       continue;
     }
@@ -231,7 +230,7 @@ function selectedTargetItems(C1: any): WorkItem[] {
     try {
       nm = String(v.name());
       imgName = String(v.parentImage().name());
-      ext = imgName.split(".").pop()!.toLowerCase();
+      ext = extOf(imgName);
     } catch (e) {
       continue;
     }
@@ -287,6 +286,11 @@ function run(): string {
 
   // currentCollection 切替で選択が失われるため、切替の前に対象を確定する。
   const items = selectedTargetItems(C1);
+
+  // 対象が無ければコレクション切替もログ出力もせず即返す(無駄なビュー切替とヘッダのみログを避ける)。
+  if (items.length === 0) {
+    return "items=0 applied=0 noref=0 nojpeg=0 manifest=" + CONFIG.manifestSubpath;
+  }
 
   // ペアリングも Match Look も All Images コレクション基準のため、常に全画像ビューへ切り替える。
   // 切替前に元コレクションを控え、処理後に必ず戻す。

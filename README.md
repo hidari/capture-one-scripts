@@ -46,7 +46,7 @@ Pairing results are appended to a log at a fixed path relative to the session ro
 |---|---|
 | `Output/matchlook_pairs.tsv` | Pairing log, appended to on every run (header written once) |
 
-Each row records the run timestamp, the target's name, the matched JPEG's name (or `-` if none was found), and whether Match Look was applied, could not resolve the reference variant (`no-ref`), or found no matching JPEG (`-`). No images are copied, so large sessions add no storage cost.
+Each row records the run timestamp, the target's name, the matched JPEG's name (or `-` if none was found), and whether Match Look was applied, the target variant could not be resolved or applying Match Look failed (`no-ref`), or no matching JPEG was found (`-`). No images are copied, so large sessions add no storage cost.
 
 ## How it works
 
