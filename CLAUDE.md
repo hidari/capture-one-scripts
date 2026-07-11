@@ -46,7 +46,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ### タスク3 — ペアリング追記ログ
 
-画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(JPEG は見つかったが対象 variant を引けなかった、または Match Look 適用に失敗した)/ `-`(JPEG が見つからなかった)のいずれか。
+画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。書き込みは do shell script ではなくネイティブ ObjC(Foundation の NSFileManager/NSString)で read-modify-write し、時刻も `formatStamp()` でネイティブ生成する(理由は Known Limitations 8)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(JPEG は見つかったが対象 variant を引けなかった、または Match Look 適用に失敗した)/ `-`(JPEG が見つからなかった)のいずれか。
 
 ## Known Limitations / Open Items
 
@@ -57,6 +57,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 5. PureRAW のサフィックス: 出力 DNG にサフィックスが付く場合は `CONFIG.stripSuffixes` に追加(例: `['-dxo']`)。
 6. 前段(PureRAW 送り)未実装: `open -a "DxO PureRAW" <RAWパス>` 案があるが無人バッチ完了は未確認。
 7. 破壊的適用前のバックアップ: Match Look 適用は AdjustmentSettings に直接値を書き既存調整を上書きする(style として残らず undo も濁りやすい)。調整済み対象を含むセッションで実行する前に、Capture One セッションの `.cosessiondb` をバックアップするか対象 variant を複製すること。Time Machine 有効化も推奨(実データで既存調整を上書きし復旧困難になった事例あり)。
+8. do shell script 禁止(C1 サンドボックス): C1 Scripts メニューから起動すると制御主体が Capture One になり、サンドボックスがシェル起動を禁じて `do shell script` が -10004 で失敗する(Raycast/ターミナル起動では通るため気付きにくい。実機で確認)。ファイル IO はネイティブ ObjC(Foundation)、タイムスタンプはネイティブ Date を使い、`sh()` / `doShellScript` を再導入しないこと。
 
 ## Session Folder Contract
 
@@ -72,7 +73,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ### AppleScript エラー -10004(権限違反)
 
-C1 の Scripts メニューから起動すると Capture One 自身が操作プロセスになるため、UI 操作の権限が要る:
+C1 の Scripts メニューから起動すると Capture One 自身が操作プロセスになる。ファイル IO はネイティブなのでシェル起因の -10004 は無く、残る -10004 は Match Look のメニュー操作(System Events)の権限:
 
 - システム設定 > プライバシーとセキュリティ > オートメーション > Capture One > 「システムイベント」を許可。
 - システム設定 > プライバシーとセキュリティ > アクセシビリティ > 「Capture One」を許可。
