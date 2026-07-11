@@ -9,7 +9,7 @@
 type ManifestRow = {
   target: string;
   jpeg: string | null;
-  matchlook: "applied" | "off" | "no-ref" | "-";
+  matchlook: "applied" | "no-ref" | "-";
 };
 
 // 処理対象の正規化単位。baseName=照合用(stripSuffixes 済み・小文字)、label=ログ表示用(原名)、
@@ -27,8 +27,6 @@ const CONFIG = {
   rawTargetExts: ["dng", "arw"],
   jpegExts: ["jpg", "jpeg"],
   stripSuffixes: [] as string[],
-  // env 未指定(C1 Scripts メニュー起動等)の Match Look 既定。実機検証済みにつき ON。
-  runMatchLook: true,
   // Match Look 用に対象と JPEG を同一コレクションに揃えるための全画像 smart album 名。
   // UI 言語依存(menuMatchLook と同じ。日本語 UI では「すべてのイメージ」)。
   allImagesCollection: "すべてのイメージ",
@@ -42,11 +40,6 @@ const CONFIG = {
 // ================= 基本ヘルパー =================
 const app = Application.currentApplication();
 app.includeStandardAdditions = true;
-
-function readEnv(a: StandardApp, name: string, fallback: string): string {
-  const v = String(a.systemAttribute(name));
-  return v !== "" ? v : fallback;
-}
 
 function sh(cmd: string): string {
   return app.doShellScript(cmd);
@@ -249,12 +242,6 @@ function selectedTargetItems(C1: any): WorkItem[] {
   return out;
 }
 
-// MATCHLOOK env("true"/"false")を解釈。未設定は CONFIG.runMatchLook にフォールバック。
-function resolveMatchLook(a: StandardApp): boolean {
-  const v = readEnv(a, "MATCHLOOK", CONFIG.runMatchLook ? "true" : "false");
-  return v === "true" || v === "1";
-}
-
 // ================= 追記ログ(manifest) =================
 // 画像はコピーせず、ペアリング結果を TSV でセッションフォルダへ追記する。
 // ヘッダはファイル新規時のみ書き、以降は行だけ追記する。
@@ -293,7 +280,6 @@ function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[])
 
 // ================= メイン =================
 function run(): string {
-  const doMatch = resolveMatchLook(app);
   const C1 = Application(CONFIG.c1AppName);
   const SE = Application("System Events");
   const root = detectSessionRoot(C1);
@@ -302,21 +288,18 @@ function run(): string {
   // currentCollection 切替で選択が失われるため、切替の前に対象を確定する。
   const items = selectedTargetItems(C1);
 
-  // Match Look は対象と JPEG が同一コレクションに要るため全画像ビューへ切り替える。
-  // 切替前に元コレクションを控え、処理後に戻す。
+  // ペアリングも Match Look も All Images コレクション基準のため、常に全画像ビューへ切り替える。
+  // 切替前に元コレクションを控え、処理後に必ず戻す。
   let originalCollection: any = null;
-  if (doMatch) {
-    try {
-      originalCollection = C1.currentDocument.currentCollection();
-    } catch (e) {
-      /* 取れなければ復帰しない */
-    }
-    ensureAllImagesCollection(C1);
+  try {
+    originalCollection = C1.currentDocument.currentCollection();
+  } catch (e) {
+    /* 取れなければ復帰しない */
   }
+  ensureAllImagesCollection(C1);
 
   const rows: ManifestRow[] = [];
   let applied = 0;
-  let off = 0;
   let noRef = 0;
   let noJpeg = 0;
 
@@ -339,20 +322,15 @@ function run(): string {
         const jv = findVariantInIndex(vi, it.baseName, CONFIG.jpegExts);
         if (jv) {
           jpegLabel = String(jv.parentImage().name());
-          if (!doMatch) {
-            matchlook = "off";
-            off++;
+          // 対象 variant は選択した拡張子で厳密に引き直す(ARW/DNG の取り違え防止)。
+          const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
+          if (tv) {
+            applyMatchLook_viaMenu(C1, SE, jv, tv);
+            applied++;
+            matchlook = "applied";
           } else {
-            // 対象 variant は選択した拡張子で厳密に引き直す(ARW/DNG の取り違え防止)。
-            const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
-            if (tv) {
-              applyMatchLook_viaMenu(C1, SE, jv, tv);
-              applied++;
-              matchlook = "applied";
-            } else {
-              matchlook = "no-ref";
-              noRef++;
-            }
+            matchlook = "no-ref";
+            noRef++;
           }
         } else {
           matchlook = "-";
@@ -367,7 +345,7 @@ function run(): string {
     appendManifest(root, stamp, rows);
   } finally {
     // ビューを元のコレクションへ戻す(appendManifest 等の例外時も必ず実行する)。
-    if (doMatch && originalCollection) {
+    if (originalCollection) {
       try {
         C1.currentDocument.currentCollection = originalCollection;
         delay(0.3);
@@ -379,9 +357,7 @@ function run(): string {
 
   return (
     "items=" + items.length +
-    " domatch=" + doMatch +
     " applied=" + applied +
-    " off=" + off +
     " noref=" + noRef +
     " nojpeg=" + noJpeg +
     " manifest=" + CONFIG.manifestSubpath
