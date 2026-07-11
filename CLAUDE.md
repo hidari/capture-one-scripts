@@ -4,70 +4,81 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repository Is
 
-macOS 専用の Capture One 現像ワークフロー自動化スクリプト。Sony α7V の RAW+JPEG 同時記録を前提に、PureRAW で現像した DNG と撮影時の creative look JPEG をペアリングし、Capture One の Match Look 機能で look を DNG へ転写する。
+macOS 専用の Capture One 現像ワークフロー自動化スクリプト。C1 で選択中の RAW 対象(PureRAW 現像後の DNG、または PureRAW を使わない場合の ARW。複数選択可)に、同一セッション内に import 済みの同名 creative-look JPEG から Capture One の Match Look 機能で look を転写する。
 
-外部依存: `exiftool`（Homebrew）、Capture One 16.5.0+、macOS のみ。ビルドは `pkf`（pkfire タスクランナー）と `bunx tsc`（TypeScript、zero install）。Match Look（メニュー操作）を実行するには、スクリプトを起動するプロセス（Raycast / ターミナル / メニュー起動なら Capture One 本体）に Accessibility（補助アクセス）権限が必要。辞書スクリプティング（select 等）には Automation 権限も要る。
+外部依存: Capture One 16.5.0+、macOS のみ。ビルドは `pkf`(pkfire タスクランナー)と `bunx tsc`(TypeScript、zero install)。辞書スクリプティング(select 等)と Match Look のメニュー操作(System Events UI スクリプティング)のいずれにも、起動プロセス(ターミナル / Raycast、または C1 Scripts メニューから起動時は Capture One 自身)に Automation・Accessibility 権限が要る。C1 自身が起動プロセスになる場合の権限手順は Troubleshooting を参照。
 
 ## Running the Script
 
-ソースは `src/matchlook_pipeline.ts`（TypeScript 単一ファイル）。**import/export を書かない**こと（module 化すると `run()` が top-level global でなくなり osascript が起動できない）。ビルドと実行は pkf タスク。
+ソースは `src/matchlook_pipeline.ts`(TypeScript 単一ファイル)。import/export を書かないこと(module 化すると `run()` が top-level global でなくなり osascript が起動できない)。ビルドと実行は pkf タスク。
 
 ```bash
 pkf run build                  # TS -> JS(bunx tsc) -> .scpt(osacompile)
-pkf run sel                    # C1 で現在選択中の DNG のみに Match Look(高速)
-pkf run all                    # Denoised フォルダ全体に Match Look(76枚で約27分)
-pkf run all --matchlook=false  # Match Look せずペアリング + manifest のみ
-pkf run install                # .scpt を ~/Library/Scripts/Capture One Scripts/ へ配置
+pkf run sel                    # C1 で現在選択中の対象に Match Look を適用
+pkf run install                # .scpt を ~/Library/Scripts/Capture One Scripts/ へ配置(メニュー表示名は Apply Match Look from Reference)
+pkf run test                   # 純粋ロジックのユニットテスト(node --test)
 ```
 
-- `src/dist/*.js`（tsc 出力）と `src/dist/*.scpt`（osacompile 出力）はビルド成果物。`src/dist/` は gitignore 済。追跡するのは `.ts` / `src/jxa.d.ts` / `tsconfig.json` / `Taskfile.pkl` / `scripts/`。
-- Raycast からは `scripts/raycast/match-look-{all,sel}.sh` を Script Commands ディレクトリに登録して `pkf run` を叩く。wrapper は `$0` から repo ルートへ cd する。
-- C1 Scripts メニューから `.scpt` を起動（env 無し）した場合の既定は `scope=sel` + `matchlook=true`（選択中の DNG に適用）。
+- `src/dist/*.js`(tsc 出力)と `src/dist/*.scpt`(osacompile 出力)はビルド成果物。`src/dist/` は gitignore 済。追跡するのは `.ts` / `src/jxa.d.ts` / `tsconfig.json` / `Taskfile.pkl` / `scripts/`。
+- Raycast からは `scripts/raycast/match-look-sel.sh` を Script Commands ディレクトリに登録して `pkf run sel` を叩く。wrapper は `$0` から repo ルートへ cd する。
+- C1 Scripts メニューから `.scpt` を起動した場合も `pkf run sel` と同じ挙動(選択中の対象へ適用)。メニュー表示名は `Taskfile.pkl` の `menuName`(`Apply Match Look from Reference`)。
 
 ## Architecture
 
-設定は冒頭の `CONFIG` に集約。主要フィールド: `denoisedSubdir`（Selects/Denoised）/ `referencesSubdir`（References）/ `manifestSubpath`（Output/matchlook_pairs.tsv）/ `exiftool` / `dngExts` / `jpegExts` / `stripSuffixes`（PureRAW サフィックス）/ `runMatchLook`（env 未指定時の Match Look 既定・現状 true）/ `allImagesCollection`（全画像 smart album 名・UI 言語依存）/ `menuMatchLook`（メニューラベル・UI 言語依存）。
+設定は冒頭の `CONFIG` に集約。主要フィールド: `manifestSubpath`(Output/matchlook_pairs.tsv・追記ログの出力先)/ `rawTargetExts`(Match Look 対象として受理する拡張子。受理拡張子の唯一の真実はこのフィールド自体であり散文へ列挙しない)/ `jpegExts` / `stripSuffixes`(PureRAW サフィックス)/ `allImagesCollection`(全画像 smart album 名・UI 言語依存)/ `menuMatchLook`(メニューラベル・UI 言語依存)。
 
-実行スコープと Match Look on/off は env で切り替える。pkf タスクが `SCOPE`（all/sel）と `MATCHLOOK`（true/false param）を osascript に渡し、TS 側が `app.systemAttribute` で読む。env 未指定（メニュー起動）は `scope=sel` / `matchlook=CONFIG.runMatchLook` にフォールバックする。
+ペアリングと Match Look 適用は常に実行される単一モード。旧 `SCOPE`(all/sel)・`MATCHLOOK`(true/false)env による切替は撤廃した。
 
-### タスク1 — ペアリング
+### タスク1 — ペアリング(All Images コレクション基準)
 
-`buildJpegIndex()` が References の JPEG を `byName`（ベース名・小文字・`stripSuffixes` 適用後）と `byTime`（`DateTimeOriginal`・exiftool）に登録。`matchToJpeg()` は名前一致を優先し、DNG のファイルパスがあるとき（all モード）のみ撮影時刻フォールバックを試みる。sel モードは path が無いので byName のみ（同名 RAW+JPEG 運用では常に成立）。
+`selectedTargetItems()` が(currentCollection 切替前に)選択中の variant を読み、`parentImage` の拡張子が `CONFIG.rawTargetExts` に含まれるものだけ WorkItem 化する(`baseName` は `stripSuffixes` 適用後・小文字、`ext` は選択時点の拡張子)。切替後、`buildVariantIndex()` が `doc.variants()` を1回だけ全走査して `baseName` ごとに `{ext, variant}` の配列へ索引化する(All Images には同名の ARW/JPG/DNG が並ぶため `ext` を保持する)。`findVariantInIndex()` は `baseName` + 期待拡張子群で検索し、出現順で最初に一致した variant を返す(同名衝突時の先勝ち)。JPEG は `CONFIG.jpegExts` で、対象は選択時点の `ext` 一本で引き直す(ARW/DNG の取り違え防止)。
 
-DNG の供給源は WorkItem に正規化される。`all` = `listFiles(Denoised)` のファイル、`sel` = `selectedDngItems()` が返す選択中の DNG variant（切替で選択が失われるため All Images 切替の前に確定する）。後段は両モード共通。
+### タスク2 — Match Look 適用(UI スクリプティング一択)
 
-### タスク2 — Match Look 適用（UI スクリプティング一択）
+辞書に `match look` 相当のコマンドは無い(辞書を全走査して確認済み。辞書は各自 C1 の Script Editor / Open Scripting Dictionary で開く)。`copyAdjustments` / `applyAdjustments` は全調整の丸コピーで別機能。実機でも Match Look は AdjustmentSettings に直接値を書き style としては残らない。よって `applyMatchLook_viaMenu()`(メニュークリック)が唯一の経路。JPEG を単独選択 → 「調整 > セットマッチルックリファレンス」→ 対象を単独選択 → 「調整 > マッチルックを適用」。
 
-辞書に `match look` 相当のコマンドは無い（辞書を全走査して確認済み。辞書は各自 C1 の Script Editor / Open Scripting Dictionary で開く）。`copyAdjustments` / `applyAdjustments` は全調整の丸コピーで別機能。実機でも Match Look は AdjustmentSettings に直接値を書き style としては残らない。よって `applyMatchLook_viaMenu()`（メニュークリック）が唯一の経路。JPEG を単独選択 → 「調整 > セットマッチルックリファレンス」→ DNG を単独選択 → 「調整 > マッチルックを適用」。
+実機検証で判明した2つの重要事実(いずれも実データの通し実行で確定):
 
-実機検証で判明した2つの重要事実（いずれも実データの通し実行で確定）:
+- `variants()` は current collection スコープ。対象のコレクションだけをブラウズ中は JPEG が variants() に載らず、Match Look の参照 variant を引けない。そこで `ensureAllImagesCollection()` が `currentCollection` を全画像 smart album(`CONFIG.allImagesCollection`)へ設定して対象+JPEG を同一コレクションに揃え、処理後に元のコレクションへ戻す。対象と JPEG が同一セッションに import 済みであれば、ユーザーの手動お気に入り操作は不要。All Images には ARW+JPG+DNG が同名で並ぶため、拡張子弁別が必須。
+- メニューの enabled 更新は非同期に遅延する。`d.select` 後すぐにメニューをクリックすると disabled で失敗する。`clickMenuItem()` は enabled をポーリング(最大約5秒)して true になった瞬間に click する。
 
-- **`variants()` は current collection スコープ**。Denoised フォルダだけをブラウズ中は JPEG が variants() に載らず、Match Look の参照 variant を引けない。そこで `ensureAllImagesCollection()` が `currentCollection` を全画像 smart album（`CONFIG.allImagesCollection`）へ設定して DNG+JPG を同一コレクションに揃え、処理後に元のコレクションへ戻す。References/Denoised がセッションのフォルダに存在すれば、ユーザーの手動インポート/お気に入り操作は不要。All Images には ARW+JPG+DNG が同名で並ぶため、拡張子弁別が必須。
-- **メニューの enabled 更新は非同期に遅延する**。`d.select` 後すぐにメニューをクリックすると disabled で失敗する。`clickMenuItem()` は enabled をポーリング（最大約5秒）して true になった瞬間に click する。
+`findVariantInIndex()` は `buildVariantIndex()` が事前に索引化した `baseName` ごとの `{ext, variant}` 一覧から、期待拡張子(`CONFIG.jpegExts` または対象の `ext`)に一致する最初の variant を返す。索引化自体は `variant.name()`(拡張子なし・RAW/JPEG/DNG 同名)を `parentImage().name()` の拡張子で弁別して行う。これを怠ると同名衝突で自己適用の no-op になる。
 
-`findVariantByBaseName()` は `variants()` を走査し、`variant.name()`（拡張子なし・RAW/JPEG/DNG 同名）を `parentImage().name()` の拡張子で `CONFIG.jpegExts` / `CONFIG.dngExts` に弁別する。これを怠ると同名衝突で自己適用の no-op になる。
+### タスク3 — ペアリング追記ログ
 
-### タスク3 — ペアリング manifest
-
-画像コピーは行わない。ペアリング結果を TSV（`dng` / `jpeg`[session 相対] / `method`[name/time/-] / `matchlook`[applied/off/no-ref/-]）で `Output/matchlook_pairs.tsv` に毎回上書き出力する。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook=no-ref` はペアは disk 上にあるが variant を browser に引けなかったことを示す（切替や権限の問題の手がかり）。
+画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(ペアは見つかったが対象 variant を索引から引けなかった)/ `-`(JPEG が見つからなかった)のいずれか。
 
 ## Known Limitations / Open Items
 
-1. **Match Look は辞書に無い（確定・実機で全件検証済み）**: Route B メニュークリックが唯一。76枚全件に適用し look 変化を目視確認済み。前提は launcher への Accessibility 権限。ラベルは `CONFIG.menuMatchLook`。
-2. **全画像コレクション依存**: `variants()` が current collection スコープのため、`CONFIG.allImagesCollection`（UI 言語依存）の smart album へ切替が必要。名前が違う環境では CONFIG を合わせる。
-3. **メニュー enabled ポーリング**: select 後のメニュー有効化遅延に対応するため必須。固定 delay に戻さないこと。
-4. **all モードの実行時間**: 76枚で約27分（1ペアあたり約21秒、主因はメニュー有効化待ち）。sel は数枚なら高速。最適化（`activate` の1回化等）は flakiness 再発に注意して別 follow-up で扱う。なお `buildVariantIndex` は `doc.variants()` をループ前に1回だけ取得しループ全体でキャッシュするため、variant object specifier が `currentCollection` 固定のまま約27分有効である前提に立つ（従来は per-item 再フェッチ）。この前提は sel でしか live smoke していないので、all を継続運用する前に一度 all の live smoke で確認すること（Issue #1 の残存項目）。
-5. **同名衝突の拡張子弁別**: `findVariantByBaseName` の `parentImage().name()` 拡張子フィルタを移植/改修で必ず維持する。
-6. **PureRAW のサフィックス**: 出力 DNG にサフィックスが付く場合は `CONFIG.stripSuffixes` に追加（例: `['-dxo']`）。
-7. **前段（PureRAW 送り）未実装**: `open -a "DxO PureRAW" <RAWパス>` 案があるが無人バッチ完了は未確認。
-8. **破壊的バッチ前のバックアップ**: `all` の Match Look は AdjustmentSettings に直接値を書き既存調整を上書きする（style として残らず undo も濁りやすい）。調整済み DNG を含むセッションに `all` を流す前に、Capture One セッションの `.cosessiondb` をバックアップするか対象 variant を複製すること。Time Machine 有効化も推奨（実データで既存調整を上書きし復旧困難になった事例あり）。
+1. Match Look は辞書に無い(確定・実機で全件検証済み): Route B メニュークリックが唯一。過去に一括76枚へ適用し look 変化を目視確認済み(現在の sel 単一モードでも同一経路を通る)。前提は launcher への Accessibility 権限。ラベルは `CONFIG.menuMatchLook`。
+2. 全画像コレクション依存: `variants()` が current collection スコープのため、`CONFIG.allImagesCollection`(UI 言語依存)の smart album へ切替が必要。名前が違う環境では CONFIG を合わせる。
+3. メニュー enabled ポーリング: select 後のメニュー有効化遅延に対応するため必須。固定 delay に戻さないこと。
+4. 同名衝突の拡張子弁別: `buildVariantIndex` / `findVariantInIndex` の `parentImage().name()` 拡張子フィルタを移植/改修で必ず維持する。
+5. PureRAW のサフィックス: 出力 DNG にサフィックスが付く場合は `CONFIG.stripSuffixes` に追加(例: `['-dxo']`)。
+6. 前段(PureRAW 送り)未実装: `open -a "DxO PureRAW" <RAWパス>` 案があるが無人バッチ完了は未確認。
+7. 破壊的適用前のバックアップ: Match Look 適用は AdjustmentSettings に直接値を書き既存調整を上書きする(style として残らず undo も濁りやすい)。調整済み対象を含むセッションで実行する前に、Capture One セッションの `.cosessiondb` をバックアップするか対象 variant を複製すること。Time Machine 有効化も推奨(実データで既存調整を上書きし復旧困難になった事例あり)。
 
 ## Session Folder Contract
 
-スクリプトが期待するフォルダ構成（`sessionRoot` 起点の相対パス）:
+必須のフォルダ構成は無い。対象(PureRAW 現像後の DNG、または PureRAW 非使用時の ARW)と、同名の creative-look JPEG が同一セッションに import 済みであれば、All Images コレクション基準で解決する。PureRAW を使わない場合は Selects 直下などにある ARW を直接選択して適用できる。
+
+固定パスなのは追記ログの出力先のみ:
 
 | パス | 内容 |
 |---|---|
-| `Selects/Denoised/` | PureRAW 出力 DNG（タスク1の入力・all モードの走査対象） |
-| `References/` | creative look JPEG（タスク1の入力） |
-| `Output/matchlook_pairs.tsv` | ペアリング対応表 TSV（タスク3の出力・毎回上書き） |
+| `Output/matchlook_pairs.tsv` | ペアリング追記ログ(タスク3の出力・ヘッダ以外は毎回追記) |
+
+## Troubleshooting
+
+### AppleScript エラー -10004(権限違反)
+
+C1 の Scripts メニューから起動すると Capture One 自身が操作プロセスになるため、UI 操作の権限が要る:
+
+- システム設定 > プライバシーとセキュリティ > オートメーション > Capture One > 「システムイベント」を許可。
+- システム設定 > プライバシーとセキュリティ > アクセシビリティ > 「Capture One」を許可。
+
+過去に拒否したダイアログは再表示されない。強制的に再プロンプトさせるには:
+
+    tccutil reset AppleEvents com.captureone.captureone16
+
+その後 Capture One を再起動しスクリプトを一度実行して許可を確定する。
