@@ -46,7 +46,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ### タスク3 — ペアリング追記ログ
 
-画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(ペアは見つかったが対象 variant を索引から引けなかった)/ `-`(JPEG が見つからなかった)のいずれか。
+画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(JPEG は見つかったが対象 variant を引けなかった、または Match Look 適用に失敗した)/ `-`(JPEG が見つからなかった)のいずれか。
 
 ## Known Limitations / Open Items
 

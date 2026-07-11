@@ -34,7 +34,7 @@ local build: Task = new {
 
 local sel: Task = new {
   name = "sel"
-  description = "Capture One で現在選択中の DNG のみ処理"
+  description = "Capture One で現在選択中の対象に Match Look を適用"
   cmd = "osascript -l JavaScript src/dist/matchlook_pipeline.js"
   deps { emit }
   cache = false

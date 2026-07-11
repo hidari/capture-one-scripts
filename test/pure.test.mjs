@@ -15,7 +15,7 @@ function loadModule() {
   const src = readFileSync(distJs, "utf8");
   const epilogue =
     "\n;globalThis.__M = {" +
-    " stripSuffixes, baseNameNoExt, q, joinPath, parentDir," +
+    " stripSuffixes, q, joinPath, parentDir, extOf," +
     " findVariantInIndex, manifestHeaderLines, manifestRowLine, CONFIG };\n";
   // top-level 実行文(app = Application.currentApplication())が触るものだけスタブ。
   const stubApp = { includeStandardAdditions: false };
@@ -71,10 +71,10 @@ test("stripSuffixes: 設定時のみ末尾を除去 / 既定は恒等", () => {
   assert.equal(M.stripSuffixes("img1234-dxo"), "img1234-dxo");
 });
 
-test("baseNameNoExt: パス/拡張子/多重ドット", () => {
-  assert.equal(M.baseNameNoExt("/a/b/IMG1234.dng"), "IMG1234");
-  assert.equal(M.baseNameNoExt("IMG1234"), "IMG1234");
-  assert.equal(M.baseNameNoExt("/a/b/photo.final.jpg"), "photo.final");
+test("extOf: 拡張子を小文字で取り出す / ドット無しは全体", () => {
+  assert.equal(M.extOf("IMG1234.dng"), "dng");
+  assert.equal(M.extOf("photo.final.JPG"), "jpg");
+  assert.equal(M.extOf("noext"), "noext");
 });
 
 test("q: シングルクォートを安全にエスケープ", () => {
