@@ -226,10 +226,10 @@ function clickMenuItem(SE: any, menuName: string, itemName: string): void {
     }
     if (enabled) {
       item.click();
-      delay(0.4);
+      sleep(0.4);
       return;
     }
-    delay(0.2);
+    sleep(0.2);
   }
   throw new Error("メニュー項目が有効化されない: " + menuName + " > " + itemName);
 }
@@ -239,7 +239,7 @@ function selectOnly(doc: any, variant: C1Variant): void {
   const selected = doc.variants.whose({ selected: true })();
   if (selected.length) doc.deselect({ variants: selected });
   doc.select({ variant: variant });
-  delay(0.3);
+  sleep(0.3);
 }
 
 function applyMatchLook_viaMenu(
@@ -251,7 +251,7 @@ function applyMatchLook_viaMenu(
   const m = CONFIG.menuMatchLook;
   const doc = C1.currentDocument;
   C1.activate(); // メニュー操作は frontmost の C1 に対して行う
-  delay(0.4);
+  sleep(0.4);
   selectOnly(doc, jpegVariant); // 参照側 JPEG だけを選択
   clickMenuItem(SE, m.menu, m.setReference); // 参照にセット
   selectOnly(doc, targetVariant); // 対象 RAW だけを選択
@@ -313,7 +313,7 @@ function ensureAllImagesCollection(C1: any): void {
         String(cols[i].name()) === CONFIG.allImagesCollection
       ) {
         doc.currentCollection = cols[i];
-        delay(0.5);
+        sleep(0.5);
         return;
       }
     } catch (e) {
@@ -451,6 +451,9 @@ function run(): string {
     return formatSummary(0, 0, 0, 0);
   }
 
+  // バッチ進捗 HUD(生成失敗時 null で継続。以降 hud* は no-op になる)。
+  const hud = createProgressHUD(items.length);
+
   // ペアリングも Match Look も All Images コレクション基準のため、常に全画像ビューへ切り替える。
   // 切替前に元コレクションを控え、処理後に必ず戻す。
   let originalCollection: any = null;
@@ -473,7 +476,10 @@ function run(): string {
       return variantIndexCache;
     };
 
+    let done = 0;
     for (const it of items) {
+      done++;
+      hudSetItem(hud, done, items.length, it.label);
       let jpegLabel: string | null = null;
       let matchlook: ManifestRow["matchlook"] = "-";
       try {
@@ -519,10 +525,11 @@ function run(): string {
     if (originalCollection) {
       try {
         C1.currentDocument.currentCollection = originalCollection;
-        delay(0.3);
+        sleep(0.3);
       } catch (e) {
         /* 戻せなくても致命的ではない */
       }
     }
+    hudClose(hud);
   }
 }
