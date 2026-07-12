@@ -16,7 +16,7 @@ function loadModule() {
   const epilogue =
     "\n;globalThis.__M = {" +
     " stripSuffixes, formatStamp, joinPath, parentDir, extOf," +
-    " findVariantInIndex, manifestHeaderLines, manifestRowLine, CONFIG };\n";
+    " findVariantInIndex, manifestHeaderLines, manifestRowLine, manifestContent, CONFIG };\n";
   // 評価用の最小スタブ(現状 top-level に実行文は無いが、将来の追加に備えて用意)。
   const stubApp = { includeStandardAdditions: false };
   const Application = () => stubApp;
@@ -103,4 +103,11 @@ test("manifestRowLine: タブ区切り / null は '-'", () => {
     "2026-07-12 01:00:00\tIMG.dng\tIMG.jpg\tapplied",
   );
   assert.equal(M.manifestRowLine("T", "IMG.dng", null, "-"), "T\tIMG.dng\t-\t-");
+});
+
+test("manifestContent: 新規はヘッダ先頭 / 既存は末尾へ追記(ヘッダ二重化しない)", () => {
+  assert.equal(M.manifestContent(null, "H\n", "r1"), "H\nr1\n");
+  assert.equal(M.manifestContent("H\nr1\n", "H\n", "r2"), "H\nr1\nr2\n");
+  // 既存があるとき header は捨てる(二重ヘッダ防止)
+  assert.equal(M.manifestContent("prev\n", "HEADER\n", "row"), "prev\nrow\n");
 });
