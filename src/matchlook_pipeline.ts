@@ -76,6 +76,14 @@ function stripSuffixes(name: string): string {
   return name;
 }
 
+// 照合キーの正規化。小文字化してから PureRAW サフィックスを剥がす。索引側(buildVariantIndex)と
+// 選択側(selectedTargetItems)で必ずこの順序を通す。順序が逆(strip -> lower)だと stripSuffixes の
+// endsWith が大文字小文字で取りこぼし、索引キーと照合キーが食い違って対象自身の variant を引けず
+// no-ref に落ちる(例: ファイル名 IMG-DxO と CONFIG.stripSuffixes=['-dxo'] で不一致)。
+function normalizeBase(name: string): string {
+  return stripSuffixes(name.toLowerCase());
+}
+
 // ================= セッションルート検出 =================
 function detectSessionRoot(C1: any): string {
   if (CONFIG.sessionRootOverride) return CONFIG.sessionRootOverride;
@@ -159,15 +167,14 @@ function buildVariantIndex(C1: any): VariantIndex {
   // index[base] が Function/prototype に解決されて .push が TypeError になる(run 全体がクラッシュ)。
   const index: VariantIndex = Object.create(null);
   for (const v of doc.variants() as C1Variant[]) {
-    let n = "";
+    let base = "";
     let imgExt = "";
     try {
-      n = String(v.name()).toLowerCase();
+      base = normalizeBase(String(v.name()));
       imgExt = extOf(v.parentImage().name());
     } catch (e) {
       continue;
     }
-    const base = stripSuffixes(n);
     if (!(base in index)) index[base] = [];
     // variants() の出現順で push し、同名複数ヒット時の先勝ちを findVariantInIndex で再現する。
     index[base].push({ ext: imgExt, variant: v });
@@ -235,7 +242,7 @@ function selectedTargetItems(C1: any): WorkItem[] {
       continue;
     }
     if (CONFIG.rawTargetExts.indexOf(ext) >= 0) {
-      out.push({ baseName: stripSuffixes(nm).toLowerCase(), label: imgName, ext: ext });
+      out.push({ baseName: normalizeBase(nm), label: imgName, ext: ext });
     }
   }
   return out;
@@ -314,6 +321,18 @@ function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[])
   writeTextFile(dest, manifestContent(existing, manifestHeaderLines(sessionRoot), body));
 }
 
+// run() の結果 summary(1 行)。早期 return(対象 0 件)と本処理の両方で使い、出力スキーマの
+// 二重管理を避ける(フィールドの追加/改名はここ 1 箇所で済む)。
+function formatSummary(items: number, applied: number, noRef: number, noJpeg: number): string {
+  return (
+    "items=" + items +
+    " applied=" + applied +
+    " noref=" + noRef +
+    " nojpeg=" + noJpeg +
+    " manifest=" + CONFIG.manifestSubpath
+  );
+}
+
 // ================= メイン =================
 function run(): string {
   const C1 = Application(CONFIG.c1AppName);
@@ -326,7 +345,7 @@ function run(): string {
 
   // 対象が無ければコレクション切替もログ出力もせず即返す(無駄なビュー切替とヘッダのみログを避ける)。
   if (items.length === 0) {
-    return "items=0 applied=0 noref=0 nojpeg=0 manifest=" + CONFIG.manifestSubpath;
+    return formatSummary(0, 0, 0, 0);
   }
 
   // ペアリングも Match Look も All Images コレクション基準のため、常に全画像ビューへ切り替える。
@@ -340,9 +359,6 @@ function run(): string {
   ensureAllImagesCollection(C1);
 
   const rows: ManifestRow[] = [];
-  let applied = 0;
-  let noRef = 0;
-  let noJpeg = 0;
 
   // 切替後に例外が出ても finally で必ず元コレクションへ戻すため try で囲む。
   try {
@@ -367,32 +383,28 @@ function run(): string {
           const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
           if (tv) {
             applyMatchLook_viaMenu(C1, SE, jv, tv);
-            applied++;
             matchlook = "applied";
           } else {
             matchlook = "no-ref";
-            noRef++;
           }
-        } else {
-          matchlook = "-";
-          noJpeg++;
         }
+        // JPEG が見つからなければ matchlook は初期値 "-" のまま(集計時に nojpeg 扱い)。
       } catch (e) {
         matchlook = "no-ref";
-        noRef++;
       }
       rows.push({ target: it.label, jpeg: jpegLabel, matchlook: matchlook });
     }
 
+    // カウンタは rows(唯一の真実)から導出する。ループ中に別変数で数えると乖離しうる。
+    // matchlook は applied / no-ref / "-"(nojpeg) のいずれか 1 つを必ず持つので排他に集計できる。
+    const applied = rows.filter((r) => r.matchlook === "applied").length;
+    const noRef = rows.filter((r) => r.matchlook === "no-ref").length;
+    const noJpeg = rows.filter((r) => r.matchlook === "-").length;
+
     // 破壊的な Match Look 適用はこの時点で完了済み。summary(何件に何を適用したか)を先に
     // 組み立て、ログ保存が失敗しても summary を載せて throw する。fail-loud は保ちつつ、
     // 「ユーザーの写真に何をしたか」だけは必ず伝える(黙って applied=N を返して失敗を隠さない)。
-    const summary =
-      "items=" + items.length +
-      " applied=" + applied +
-      " noref=" + noRef +
-      " nojpeg=" + noJpeg +
-      " manifest=" + CONFIG.manifestSubpath;
+    const summary = formatSummary(items.length, applied, noRef, noJpeg);
     try {
       appendManifest(root, stamp, rows);
     } catch (e) {
