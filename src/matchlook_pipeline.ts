@@ -265,7 +265,8 @@ function manifestRowLine(
 
 // ネイティブ(ObjC/Foundation)ファイル I/O。do shell script は Capture One のサンドボックスで
 // シェル起動が禁じられ -10004 になるため、シェルを介さず書き込む(実機の C1 メニュー起動で確認済み)。
-// 失敗は握りつぶさず throw する(manifest は破壊的バッチ前の監査ログ。無音で失うと危険)。
+// 失敗は握りつぶさず throw する(manifest は「何を適用したか」の実行後ログ。Match Look 適用の後に
+// 書くので事前監査には使えないが、無音で失うと何を上書きしたか追跡不能になるため fail-loud にする)。
 function ensureDir(dir: string): void {
   const ok = $.NSFileManager.defaultManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(
     $(dir), true, $(), $(),
@@ -382,9 +383,24 @@ function run(): string {
       }
       rows.push({ target: it.label, jpeg: jpegLabel, matchlook: matchlook });
     }
-    appendManifest(root, stamp, rows);
+
+    // 破壊的な Match Look 適用はこの時点で完了済み。summary(何件に何を適用したか)を先に
+    // 組み立て、ログ保存が失敗しても summary を載せて throw する。fail-loud は保ちつつ、
+    // 「ユーザーの写真に何をしたか」だけは必ず伝える(黙って applied=N を返して失敗を隠さない)。
+    const summary =
+      "items=" + items.length +
+      " applied=" + applied +
+      " noref=" + noRef +
+      " nojpeg=" + noJpeg +
+      " manifest=" + CONFIG.manifestSubpath;
+    try {
+      appendManifest(root, stamp, rows);
+    } catch (e) {
+      throw new Error(summary + " / manifest 書き込み失敗: " + String(e));
+    }
+    return summary;
   } finally {
-    // ビューを元のコレクションへ戻す(appendManifest 等の例外時も必ず実行する)。
+    // ビューを元のコレクションへ戻す(return / throw いずれでも finally で必ず実行する)。
     if (originalCollection) {
       try {
         C1.currentDocument.currentCollection = originalCollection;
@@ -394,12 +410,4 @@ function run(): string {
       }
     }
   }
-
-  return (
-    "items=" + items.length +
-    " applied=" + applied +
-    " noref=" + noRef +
-    " nojpeg=" + noJpeg +
-    " manifest=" + CONFIG.manifestSubpath
-  );
 }
