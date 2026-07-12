@@ -18,7 +18,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
   const base = [
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
-    "manifestContent", "formatSummary", "CONFIG",
+    "manifestContent", "formatSummary", "progressLabel", "CONFIG",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -215,4 +215,9 @@ test("buildVariantIndex: constructor/__proto__ 名でもクラッシュせず索
   const idx = M.buildVariantIndex(C1);
   assert.equal(M.findVariantInIndex(idx, "constructor", ["dng"]).parentImage().name(), "constructor.dng");
   assert.equal(M.findVariantInIndex(idx, "__proto__", ["jpg"]).parentImage().name(), "__proto__.jpg");
+});
+
+test("progressLabel: 表示テキストを固定(done / total)", () => {
+  assert.equal(M.progressLabel(8, 12), "Applying Match Look 8 / 12");
+  assert.equal(M.progressLabel(0, 1), "Applying Match Look 0 / 1");
 });
