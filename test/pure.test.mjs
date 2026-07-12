@@ -16,8 +16,9 @@ const distJs = join(here, "..", "src", "dist", "matchlook_pipeline.js");
 function loadModule(extraSandbox = {}, extraExposed = []) {
   const src = readFileSync(distJs, "utf8");
   const base = [
-    "stripSuffixes", "formatStamp", "joinPath", "parentDir", "extOf",
-    "findVariantInIndex", "manifestHeaderLines", "manifestRowLine", "manifestContent", "CONFIG",
+    "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
+    "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
+    "manifestContent", "formatSummary", "CONFIG",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -49,6 +50,15 @@ function makeBridge(store) {
     unwrap: (x) => (x && typeof x === "object" && "__content" in x ? x.__content : undefined),
   };
   return { $, ObjC };
+}
+
+// buildVariantIndex 検証用の最小 fake。variant.name() は拡張子なし、parentImage().name() は
+// 拡張子付き(実機と同じ)。ObjC は不要なので既定の loadModule で通る。
+function fakeVariant(variantName, imageName) {
+  return { name: () => variantName, parentImage: () => ({ name: () => imageName }) };
+}
+function fakeC1(variants) {
+  return { currentDocument: { variants: () => variants } };
 }
 
 test("findVariantInIndex: 拡張子で弁別する(同名 ARW/JPG/DNG)", () => {
@@ -152,4 +162,57 @@ test("readTextFile: 読み取り失敗(nil)は typeof ガードで throw", () =>
   // typeof ガードを外すと undefined を素通しし throw しなくなり FAIL する(変異検出)。
   const Mb = loadModule(makeBridge({}), ["readTextFile"]);
   assert.throws(() => Mb.readTextFile("/missing"), /読み取れません/);
+});
+
+test("normalizeBase: 小文字化してからサフィックス除去(索引側と選択側で同一キー)", () => {
+  const saved = M.CONFIG.stripSuffixes;
+  try {
+    M.CONFIG.stripSuffixes = ["-dxo"];
+    // 肝: 大文字混じりサフィックスでも剥がれる。順序を strip -> lower に戻すと
+    // "IMG1234-DxO" が "img1234-dxo" のままになりこの assert が FAIL する(変異検出)。
+    assert.equal(M.normalizeBase("IMG1234-DxO"), "img1234");
+    assert.equal(M.normalizeBase("img1234-dxo"), "img1234");
+    assert.equal(M.normalizeBase("IMG1234"), "img1234");
+  } finally {
+    M.CONFIG.stripSuffixes = saved;
+  }
+  // 既定(サフィックス無し)は小文字化のみ。
+  assert.equal(M.normalizeBase("IMG1234-DxO"), "img1234-dxo");
+});
+
+test("formatSummary: 出力スキーマを固定(早期 return と本処理で共通)", () => {
+  assert.equal(
+    M.formatSummary(3, 2, 1, 0),
+    "items=3 applied=2 noref=1 nojpeg=0 manifest=Output/matchlook_pairs.tsv",
+  );
+  assert.equal(
+    M.formatSummary(0, 0, 0, 0),
+    "items=0 applied=0 noref=0 nojpeg=0 manifest=Output/matchlook_pairs.tsv",
+  );
+});
+
+test("buildVariantIndex: parentImage 拡張子で弁別し baseName ごとに索引化(同名 ARW/JPG/DNG)", () => {
+  const C1 = fakeC1([
+    fakeVariant("IMG1234", "IMG1234.ARW"),
+    fakeVariant("IMG1234", "IMG1234.JPG"),
+    fakeVariant("IMG1234", "IMG1234.dng"),
+  ]);
+  const idx = M.buildVariantIndex(C1);
+  // baseName は normalizeBase(小文字)。ext は parentImage 拡張子(小文字)で弁別。
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["jpg", "jpeg"]).parentImage().name(), "IMG1234.JPG");
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["dng"]).parentImage().name(), "IMG1234.dng");
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["arw"]).parentImage().name(), "IMG1234.ARW");
+});
+
+test("buildVariantIndex: constructor/__proto__ 名でもクラッシュせず索引化(Object.create(null) を pin)", () => {
+  // 通常の {} だと base==="constructor" が Object.prototype と衝突し index[base] が
+  // Function に解決されて .push が TypeError になる。Object.create(null) を {} に戻すと
+  // buildVariantIndex が throw してこのテストが FAIL する(変異検出)。
+  const C1 = fakeC1([
+    fakeVariant("constructor", "constructor.dng"),
+    fakeVariant("__proto__", "__proto__.jpg"),
+  ]);
+  const idx = M.buildVariantIndex(C1);
+  assert.equal(M.findVariantInIndex(idx, "constructor", ["dng"]).parentImage().name(), "constructor.dng");
+  assert.equal(M.findVariantInIndex(idx, "__proto__", ["jpg"]).parentImage().name(), "__proto__.jpg");
 });

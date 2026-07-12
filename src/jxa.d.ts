@@ -6,22 +6,10 @@ declare function delay(seconds: number): void;
 declare const $: any;
 declare const ObjC: { import(name: string): void; unwrap(x: any): any };
 
-interface StandardApp {
-  includeStandardAdditions: boolean;
-  doShellScript(cmd: string): string;
-  displayDialog(
-    text: string,
-    opts?: { withTitle?: string; buttons?: string[]; defaultButton?: string },
-  ): unknown;
-  activate(): void;
-  systemAttribute(name: string): string;
-}
-
-declare const Application: {
-  currentApplication(): StandardApp;
-  // Capture One / System Events は動的ツリー。使用面だけ最小 interface に絞る。
-  (name: string): any;
-};
+// Capture One / System Events は名前で引く動的ツリーなので any 運用(使用面が動的すぎる)。
+// currentApplication や StandardApp(doShellScript 等)は本体で未使用のため宣言しない。
+// do shell script は C1 サンドボックスで -10004 になるため型語彙からも外して再導入を招かない。
+declare const Application: (name: string) => any;
 
 // Capture One（辞書スクリプティング）の使用面だけ最小宣言。
 // currentDocument 等は any 経由で動的アクセスするため、実注釈が効くのは C1Variant のみ。
