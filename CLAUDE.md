@@ -58,6 +58,8 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 6. 前段(PureRAW 送り)未実装: `open -a "DxO PureRAW" <RAWパス>` 案があるが無人バッチ完了は未確認。
 7. 破壊的適用前のバックアップ: Match Look 適用は AdjustmentSettings に直接値を書き既存調整を上書きする(style として残らず undo も濁りやすい)。調整済み対象を含むセッションで実行する前に、Capture One セッションの `.cosessiondb` をバックアップするか対象 variant を複製すること。Time Machine 有効化も推奨(実データで既存調整を上書きし復旧困難になった事例あり)。
 8. do shell script 禁止(C1 サンドボックス): C1 Scripts メニューから起動すると制御主体が Capture One になり、サンドボックスがシェル起動を禁じて `do shell script` が -10004 で失敗する(Raycast/ターミナル起動では通るため気付きにくい。実機で確認)。ファイル IO はネイティブ ObjC(Foundation)、タイムスタンプはネイティブ Date を使い、`sh()` / `doShellScript` を再導入しないこと。
+9. 旧ビルドで壊れた manifest の一度きり復旧: かつて `readTextFile` が `String(NSString)` を使い中身でなく `"[id __NSCFString]"` を返していたため、旧ビルドで2回目以降に実行したセッションの `Output/matchlook_pairs.tsv` は先頭に `[id __NSCFString]` が残りヘッダを失っている場合がある。現行コードは中身を正しく読むが `existing` があれば末尾へ追記するだけで前方修正しかしない(壊れた先頭は自動修復しない)。該当ファイルは一度 `rm` するか手で直せば、次回実行時にヘッダから作り直される。
+10. manifest 書き込みは post-batch(fail-loud の位置づけ): `appendManifest` は Match Look 適用ループの後に呼ぶ実行後ログで、事前監査には使えない。IO 失敗時は握りつぶさず throw するが、`run()` は throw 前に summary(items/applied/noref/nojpeg)を組み立ててエラーメッセージへ載せるので、ログ保存に失敗しても「写真に何を適用したか」は失われない。read-only な Output や壊れた既存ファイルではこの throw が毎回出るため、9 の手順で当該ファイルを一度片付けること。
 
 ## Session Folder Contract
 
