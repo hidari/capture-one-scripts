@@ -4,7 +4,7 @@ declare function delay(seconds: number): void;
 // ObjC ブリッジ(ネイティブ file I/O 用)。do shell script は C1 のサンドボックスで
 // -10004 になるためシェルを介さず書き込む。動的なので any 運用。
 declare const $: any;
-declare const ObjC: { import(name: string): void };
+declare const ObjC: { import(name: string): void; unwrap(x: any): any };
 
 interface StandardApp {
   includeStandardAdditions: boolean;

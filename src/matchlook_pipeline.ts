@@ -265,24 +265,38 @@ function manifestRowLine(
 
 // ネイティブ(ObjC/Foundation)ファイル I/O。do shell script は Capture One のサンドボックスで
 // シェル起動が禁じられ -10004 になるため、シェルを介さず書き込む(実機の C1 メニュー起動で確認済み)。
+// 失敗は握りつぶさず throw する(manifest は破壊的バッチ前の監査ログ。無音で失うと危険)。
 function ensureDir(dir: string): void {
-  $.NSFileManager.defaultManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(
+  const ok = $.NSFileManager.defaultManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(
     $(dir), true, $(), $(),
   );
+  if (!ok) throw new Error("ディレクトリを作成できません: " + dir);
 }
 
 function fileExists(path: string): boolean {
   return $.NSFileManager.defaultManager.fileExistsAtPath($(path));
 }
 
+// NSString は String() だと中身でなく "[id __NSCFString]" を返すため ObjC.unwrap で取り出す。
 function readTextFile(path: string): string {
-  return String(
+  const s = ObjC.unwrap(
     $.NSString.stringWithContentsOfFileEncodingError($(path), $.NSUTF8StringEncoding, $()),
   );
+  if (typeof s !== "string") throw new Error("ファイルを読み取れません: " + path);
+  return s;
 }
 
 function writeTextFile(path: string, text: string): void {
-  $(text).writeToFileAtomicallyEncodingError($(path), true, $.NSUTF8StringEncoding, $());
+  const ok = $(text).writeToFileAtomicallyEncodingError(
+    $(path), true, $.NSUTF8StringEncoding, $(),
+  );
+  if (!ok) throw new Error("ファイルを書き込めません: " + path);
+}
+
+// 追記後のファイル全文を組み立てる(pure)。existing が null なら新規=ヘッダを先頭に、
+// あれば既存内容の末尾へ body を足す(ヘッダは二重に出さない)。
+function manifestContent(existing: string | null, header: string, body: string): string {
+  return (existing === null ? header : existing) + body + "\n";
 }
 
 function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[]): void {
@@ -294,8 +308,9 @@ function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[])
   const dest = joinPath(sessionRoot, CONFIG.manifestSubpath);
   ensureDir(parentDir(dest));
   // 既存があれば読み出して末尾へ追記、無ければヘッダを1回だけ先頭に置く(read-modify-write)。
-  const prefix = fileExists(dest) ? readTextFile(dest) : manifestHeaderLines(sessionRoot);
-  writeTextFile(dest, prefix + body + "\n");
+  // 単一ユーザーの手動起動を前提とし、同時実行の lost-update は想定しない。
+  const existing = fileExists(dest) ? readTextFile(dest) : null;
+  writeTextFile(dest, manifestContent(existing, manifestHeaderLines(sessionRoot), body));
 }
 
 // ================= メイン =================
