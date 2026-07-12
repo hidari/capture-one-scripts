@@ -462,12 +462,12 @@ function run(): string {
   } catch (e) {
     /* 取れなければ復帰しない */
   }
-  ensureAllImagesCollection(C1);
-
   const rows: ManifestRow[] = [];
 
-  // 切替後に例外が出ても finally で必ず元コレクションへ戻すため try で囲む。
+  // 全画像コレクションへの切替と本処理を try で囲む。createProgressHUD の後に throw しうる文を
+  // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
   try {
+    ensureAllImagesCollection(C1);
     // variant 索引は遅延メモ化する。1 件も対象が無ければ doc.variants() を一度も引かない。
     let variantIndexCache: VariantIndex | null = null;
     const getVariantIndex = (): VariantIndex => {
