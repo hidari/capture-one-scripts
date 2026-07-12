@@ -84,6 +84,11 @@ function normalizeBase(name: string): string {
   return stripSuffixes(name.toLowerCase());
 }
 
+// 進捗 HUD のタイトル表示テキスト(pure)。ユーザー可視なので英語。
+function progressLabel(done: number, total: number): string {
+  return "Applying Match Look " + done + " / " + total;
+}
+
 // ================= セッションルート検出 =================
 function detectSessionRoot(C1: any): string {
   if (CONFIG.sessionRootOverride) return CONFIG.sessionRootOverride;
