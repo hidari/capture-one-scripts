@@ -89,6 +89,18 @@ function progressLabel(done: number, total: number): string {
   return "Applying Match Look " + done + " / " + total;
 }
 
+// 進捗 HUD 表示中は run loop を回して窓を生かす。null のときは通常の delay で確実に待つ
+// (runUntilDate は入力ソースが無いと即戻るため、窓が無い間は delay を使う)。
+let activeHUD: any = null;
+
+function sleep(seconds: number): void {
+  if (activeHUD) {
+    $.NSRunLoop.mainRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
+  } else {
+    delay(seconds);
+  }
+}
+
 // ================= セッションルート検出 =================
 function detectSessionRoot(C1: any): string {
   if (CONFIG.sessionRootOverride) return CONFIG.sessionRootOverride;
@@ -110,6 +122,92 @@ function detectSessionRoot(C1: any): string {
 }
 
 // ================= Match Look(UI スクリプティング) =================
+
+// ================= 進捗 HUD(AppKit) =================
+// C1 を最前面に保つため nonactivating panel を使い activate しない。生成/更新/クローズは全て
+// 握りつぶす(進捗表示は装飾。失敗しても Match Look 本体を止めない)。
+function createProgressHUD(total: number): any {
+  try {
+    ObjC.import("AppKit");
+    const W = 340;
+    const H = 96;
+    const panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+      $.NSMakeRect(0, 0, W, H),
+      $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskNonactivatingPanel,
+      $.NSBackingStoreBuffered,
+      false,
+    );
+    panel.title = "Apply Match Look";
+    panel.level = $.NSFloatingWindowLevel;
+    panel.hidesOnDeactivate = false;
+    panel.center;
+
+    const content = panel.contentView;
+    const mkLabel = (y: number, h: number, size: number): any => {
+      const t = $.NSTextField.alloc.initWithFrame($.NSMakeRect(16, y, W - 32, h));
+      t.bezeled = false;
+      t.drawsBackground = false;
+      t.editable = false;
+      t.selectable = false;
+      t.font = $.NSFont.systemFontOfSize(size);
+      return t;
+    };
+
+    const title = mkLabel(58, 20, 13);
+    title.stringValue = progressLabel(0, total);
+    content.addSubview(title);
+
+    const bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(16, 38, W - 60, 14));
+    bar.style = $.NSProgressIndicatorStyleBar;
+    bar.indeterminate = false;
+    bar.minValue = 0;
+    bar.maxValue = total;
+    bar.doubleValue = 0;
+    content.addSubview(bar);
+
+    const spinner = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(W - 36, 36, 18, 18));
+    spinner.style = $.NSProgressIndicatorStyleSpinning;
+    spinner.indeterminate = true;
+    content.addSubview(spinner);
+    spinner.startAnimation($());
+
+    const sub = mkLabel(12, 18, 11);
+    sub.textColor = $.NSColor.secondaryLabelColor;
+    sub.stringValue = "";
+    content.addSubview(sub);
+
+    panel.orderFrontRegardless; // activate せず最前面へ(C1 を frontmost に保つ)
+    const hud = { panel: panel, bar: bar, spinner: spinner, title: title, sub: sub };
+    activeHUD = hud;
+    return hud;
+  } catch (e) {
+    activeHUD = null;
+    return null;
+  }
+}
+
+function hudSetItem(hud: any, done: number, total: number, filename: string): void {
+  if (!hud) return;
+  try {
+    hud.bar.doubleValue = done;
+    hud.title.stringValue = progressLabel(done, total);
+    hud.sub.stringValue = filename;
+  } catch (e) {
+    /* 表示更新の失敗は無視 */
+  }
+}
+
+function hudClose(hud: any): void {
+  activeHUD = null; // close が throw しても以降の sleep は delay に落ちるよう先にクリア
+  if (!hud) return;
+  try {
+    hud.spinner.stopAnimation($());
+    hud.panel.orderOut($());
+    hud.panel.close;
+  } catch (e) {
+    /* クローズ失敗は無視 */
+  }
+}
 
 // メニュー項目を「有効化されるまで待って」クリックする。
 // 実機で判明: select 後にメニューの enabled が更新されるまで非同期の遅延があり、
