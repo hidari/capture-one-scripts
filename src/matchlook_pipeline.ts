@@ -121,8 +121,6 @@ function detectSessionRoot(C1: any): string {
   );
 }
 
-// ================= Match Look(UI スクリプティング) =================
-
 // ================= 進捗 HUD(AppKit) =================
 // C1 を最前面に保つため nonactivating panel を使い activate しない。生成/更新/クローズは全て
 // 握りつぶす(進捗表示は装飾。失敗しても Match Look 本体を止めない)。
@@ -208,6 +206,8 @@ function hudClose(hud: any): void {
     /* クローズ失敗は無視 */
   }
 }
+
+// ================= Match Look(UI スクリプティング) =================
 
 // メニュー項目を「有効化されるまで待って」クリックする。
 // 実機で判明: select 後にメニューの enabled が更新されるまで非同期の遅延があり、
