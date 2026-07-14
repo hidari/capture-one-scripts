@@ -139,7 +139,7 @@ function createProgressHUD(total: number): any {
   try {
     ObjC.import("AppKit");
     const W = 340;
-    const H = 96;
+    const H = 112;
     const panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
       $.NSMakeRect(0, 0, W, H),
       $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskNonactivatingPanel,
@@ -162,11 +162,11 @@ function createProgressHUD(total: number): any {
       return t;
     };
 
-    const title = mkLabel(58, 20, 13);
+    const title = mkLabel(74, 20, 13);
     title.stringValue = progressLabel(0, total);
     content.addSubview(title);
 
-    const bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(16, 38, W - 60, 14));
+    const bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(16, 54, W - 60, 14));
     bar.style = $.NSProgressIndicatorStyleBar;
     bar.indeterminate = false;
     bar.minValue = 0;
@@ -174,19 +174,24 @@ function createProgressHUD(total: number): any {
     bar.doubleValue = 0;
     content.addSubview(bar);
 
-    const spinner = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(W - 36, 36, 18, 18));
+    const spinner = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(W - 36, 52, 18, 18));
     spinner.style = $.NSProgressIndicatorStyleSpinning;
     spinner.indeterminate = true;
     content.addSubview(spinner);
     spinner.startAnimation($());
 
-    const sub = mkLabel(12, 18, 11);
+    const sub = mkLabel(30, 18, 11);
     sub.textColor = $.NSColor.secondaryLabelColor;
     sub.stringValue = "";
     content.addSubview(sub);
 
+    const phase = mkLabel(10, 16, 11);
+    phase.textColor = $.NSColor.secondaryLabelColor;
+    phase.stringValue = "";
+    content.addSubview(phase);
+
     panel.orderFrontRegardless; // activate せず最前面へ(C1 を frontmost に保つ)
-    const hud = { panel: panel, bar: bar, spinner: spinner, title: title, sub: sub };
+    const hud = { panel: panel, bar: bar, spinner: spinner, title: title, sub: sub, phase: phase };
     activeHUD = hud;
     return hud;
   } catch (e) {
@@ -198,9 +203,30 @@ function createProgressHUD(total: number): any {
 function hudSetItem(hud: any, done: number, total: number, filename: string): void {
   if (!hud) return;
   try {
-    hud.bar.doubleValue = done;
     hud.title.stringValue = progressLabel(done, total);
     hud.sub.stringValue = filename;
+    hud.phase.stringValue = ""; // 前枚の残フェーズ表示を消す(バーはフェーズ/完了側が持つ)
+  } catch (e) {
+    /* 表示更新の失敗は無視 */
+  }
+}
+
+// 枚の途中でフェーズが変わるたびに呼ぶ。バーを half-item 前進させフェーズ行を更新する。
+function hudSetPhase(hud: any, done: number, phase: string): void {
+  if (!hud) return;
+  try {
+    hud.bar.doubleValue = phaseBarValue(done, phase);
+    hud.phase.stringValue = phaseLabel(phase);
+  } catch (e) {
+    /* 表示更新の失敗は無視 */
+  }
+}
+
+// 1 枚の処理完了時に呼ぶ。applied/スキップを問わずバーを done へ確定前進させる。
+function hudItemDone(hud: any, done: number): void {
+  if (!hud) return;
+  try {
+    hud.bar.doubleValue = done;
   } catch (e) {
     /* 表示更新の失敗は無視 */
   }
@@ -258,13 +284,16 @@ function applyMatchLook_viaMenu(
   SE: any,
   jpegVariant: C1Variant,
   targetVariant: C1Variant,
+  onPhase?: (phase: string) => void,
 ): void {
   const m = CONFIG.menuMatchLook;
   const doc = C1.currentDocument;
+  if (onPhase) onPhase("reference"); // フェーズ行を先に更新してから遅いポーリングへ入る
   C1.activate(); // メニュー操作は frontmost の C1 に対して行う
   sleep(0.4);
   selectOnly(doc, jpegVariant); // 参照側 JPEG だけを選択
   clickMenuItem(SE, m.menu, m.setReference); // 参照にセット
+  if (onPhase) onPhase("apply");
   selectOnly(doc, targetVariant); // 対象 RAW だけを選択
   clickMenuItem(SE, m.menu, m.apply); // 適用
 }
@@ -502,7 +531,7 @@ function run(): string {
           // 対象 variant は選択した拡張子で厳密に引き直す(ARW/DNG の取り違え防止)。
           const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
           if (tv) {
-            applyMatchLook_viaMenu(C1, SE, jv, tv);
+            applyMatchLook_viaMenu(C1, SE, jv, tv, (phase) => hudSetPhase(hud, done, phase));
             matchlook = "applied";
           } else {
             matchlook = "no-ref";
@@ -512,6 +541,7 @@ function run(): string {
       } catch (e) {
         matchlook = "no-ref";
       }
+      hudItemDone(hud, done); // applied/スキップを問わずバーを done へ確定前進
       rows.push({ target: it.label, jpeg: jpegLabel, matchlook: matchlook });
     }
 
