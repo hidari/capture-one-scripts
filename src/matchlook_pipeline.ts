@@ -89,6 +89,17 @@ function progressLabel(done: number, total: number): string {
   return "Applying Match Look " + done + " / " + total;
 }
 
+// 進捗 HUD のフェーズ行テキスト(pure)。ユーザー可視なので英語。
+function phaseLabel(phase: string): string {
+  return phase === "reference" ? "Setting reference…" : "Applying look…";
+}
+
+// フェーズ「開始」時点のバー値(pure)。maxValue は枚数なので half-item 単位で前進する。
+// reference 開始 = この枚は未着手 = done-1、apply 開始 = reference 完了済み = done-0.5。
+function phaseBarValue(done: number, phase: string): number {
+  return phase === "reference" ? done - 1 : done - 0.5;
+}
+
 // 進捗 HUD 表示中は run loop を回して窓を生かす。null のときは通常の delay で確実に待つ
 // (runUntilDate は入力ソースが無いと即戻るため、窓が無い間は delay を使う)。
 let activeHUD: any = null;

@@ -18,7 +18,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
   const base = [
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
-    "manifestContent", "formatSummary", "progressLabel", "CONFIG",
+    "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -220,4 +220,16 @@ test("buildVariantIndex: constructor/__proto__ 名でもクラッシュせず索
 test("progressLabel: 表示テキストを固定(done / total)", () => {
   assert.equal(M.progressLabel(8, 12), "Applying Match Look 8 / 12");
   assert.equal(M.progressLabel(0, 1), "Applying Match Look 0 / 1");
+});
+
+test("phaseLabel: フェーズ名を固定(reference / apply)", () => {
+  assert.equal(M.phaseLabel("reference"), "Setting reference…");
+  assert.equal(M.phaseLabel("apply"), "Applying look…");
+});
+
+test("phaseBarValue: フェーズ開始時のバー値(half-item)", () => {
+  assert.equal(M.phaseBarValue(1, "reference"), 0);
+  assert.equal(M.phaseBarValue(1, "apply"), 0.5);
+  assert.equal(M.phaseBarValue(3, "reference"), 2);
+  assert.equal(M.phaseBarValue(3, "apply"), 2.5);
 });
