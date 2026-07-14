@@ -100,17 +100,10 @@ function phaseBarValue(done: number, phase: string): number {
   return phase === "reference" ? done - 1 : done - 0.5;
 }
 
-// 進捗 HUD 表示中は run loop を回して窓を生かす。null のときは通常の delay で確実に待つ
-// (runUntilDate は入力ソースが無いと即戻るため、窓が無い間は delay を使う)。
-let activeHUD: any = null;
-
-function sleep(seconds: number): void {
-  if (activeHUD) {
-    $.NSRunLoop.mainRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
-  } else {
-    delay(seconds);
-  }
-}
+// Match Look 適用シーケンス中の待機は必ず JXA 組込みの delay を使う(run loop を pump しない)。
+// runUntilDate で run loop を pump すると複数枚適用の 2 枚目以降が壊れる(実機で root cause 確定)。
+// HUD の描画反映は hudPump() が HUD 更新の瞬間だけ短く run loop を回す(apply の Apple Event とは
+// 交錯しないため安全。10 枚バッチで全枚着地を実機確認)。旧 sleep()/activeHUD は撤去した。
 
 // ================= セッションルート検出 =================
 function detectSessionRoot(C1: any): string {
@@ -192,11 +185,20 @@ function createProgressHUD(total: number): any {
 
     panel.orderFrontRegardless; // activate せず最前面へ(C1 を frontmost に保つ)
     const hud = { panel: panel, bar: bar, spinner: spinner, title: title, sub: sub, phase: phase };
-    activeHUD = hud;
     return hud;
   } catch (e) {
-    activeHUD = null;
     return null;
+  }
+}
+
+// HUD の値変更を画面へ反映するため run loop を短く回す。apply の待機(delay)では回さない
+// (runUntilDate を適用シーケンスに挟むと複数枚適用が壊れる。実機で確定)。ここは HUD 更新の
+// 瞬間だけで apply の Apple Event と交錯しないため安全。
+function hudPump(): void {
+  try {
+    $.NSRunLoop.mainRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.15));
+  } catch (e) {
+    /* pump 失敗は無視 */
   }
 }
 
@@ -206,17 +208,19 @@ function hudSetItem(hud: any, done: number, total: number, filename: string): vo
     hud.title.stringValue = progressLabel(done, total);
     hud.sub.stringValue = filename;
     hud.phase.stringValue = ""; // 前枚の残フェーズ表示を消す(バーはフェーズ/完了側が持つ)
+    hudPump(); // 変更を描画へ反映
   } catch (e) {
     /* 表示更新の失敗は無視 */
   }
 }
 
-// 枚の途中でフェーズが変わるたびに呼ぶ。バーを half-item 前進させフェーズ行を更新する。
+// 1 枚の途中でフェーズが変わるたびに呼ぶ。バーを half-item 前進させフェーズ行を更新する。
 function hudSetPhase(hud: any, done: number, phase: string): void {
   if (!hud) return;
   try {
     hud.bar.doubleValue = phaseBarValue(done, phase);
     hud.phase.stringValue = phaseLabel(phase);
+    hudPump(); // 変更を描画へ反映
   } catch (e) {
     /* 表示更新の失敗は無視 */
   }
@@ -227,13 +231,13 @@ function hudItemDone(hud: any, done: number): void {
   if (!hud) return;
   try {
     hud.bar.doubleValue = done;
+    hudPump(); // 変更を描画へ反映
   } catch (e) {
     /* 表示更新の失敗は無視 */
   }
 }
 
 function hudClose(hud: any): void {
-  activeHUD = null; // close が throw しても以降の sleep は delay に落ちるよう先にクリア
   if (!hud) return;
   try {
     hud.spinner.stopAnimation($());
@@ -263,10 +267,10 @@ function clickMenuItem(SE: any, menuName: string, itemName: string): void {
     }
     if (enabled) {
       item.click();
-      sleep(0.4);
+      delay(0.4);
       return;
     }
-    sleep(0.2);
+    delay(0.2);
   }
   throw new Error("メニュー項目が有効化されない: " + menuName + " > " + itemName);
 }
@@ -276,7 +280,7 @@ function selectOnly(doc: any, variant: C1Variant): void {
   const selected = doc.variants.whose({ selected: true })();
   if (selected.length) doc.deselect({ variants: selected });
   doc.select({ variant: variant });
-  sleep(0.3);
+  delay(0.3);
 }
 
 function applyMatchLook_viaMenu(
@@ -290,7 +294,7 @@ function applyMatchLook_viaMenu(
   const doc = C1.currentDocument;
   if (onPhase) onPhase("reference"); // フェーズ行を先に更新してから遅いポーリングへ入る
   C1.activate(); // メニュー操作は frontmost の C1 に対して行う
-  sleep(0.4);
+  delay(0.4);
   selectOnly(doc, jpegVariant); // 参照側 JPEG だけを選択
   clickMenuItem(SE, m.menu, m.setReference); // 参照にセット
   if (onPhase) onPhase("apply");
@@ -353,7 +357,7 @@ function ensureAllImagesCollection(C1: any): void {
         String(cols[i].name()) === CONFIG.allImagesCollection
       ) {
         doc.currentCollection = cols[i];
-        sleep(0.5);
+        delay(0.5);
         return;
       }
     } catch (e) {
@@ -566,7 +570,7 @@ function run(): string {
     if (originalCollection) {
       try {
         C1.currentDocument.currentCollection = originalCollection;
-        sleep(0.3);
+        delay(0.3);
       } catch (e) {
         /* 戻せなくても致命的ではない */
       }
