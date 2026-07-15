@@ -60,6 +60,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 8. do shell script 禁止(C1 サンドボックス): C1 Scripts メニューから起動すると制御主体が Capture One になり、サンドボックスがシェル起動を禁じて `do shell script` が -10004 で失敗する(Raycast/ターミナル起動では通るため気付きにくい。実機で確認)。ファイル IO はネイティブ ObjC(Foundation)、タイムスタンプはネイティブ Date を使い、`sh()` / `doShellScript` を再導入しないこと。
 9. 旧ビルドで壊れた manifest の一度きり復旧: かつて `readTextFile` が `String(NSString)` を使い中身でなく `"[id __NSCFString]"` を返していたため、旧ビルドで2回目以降に実行したセッションの `Output/matchlook_pairs.tsv` は先頭に `[id __NSCFString]` が残りヘッダを失っている場合がある。現行コードは中身を正しく読むが `existing` があれば末尾へ追記するだけで前方修正しかしない(壊れた先頭は自動修復しない)。該当ファイルは一度 `rm` するか手で直せば、次回実行時にヘッダから作り直される。
 10. manifest 書き込みは post-batch(fail-loud の位置づけ): `appendManifest` は Match Look 適用ループの後に呼ぶ実行後ログで、事前監査には使えない。IO 失敗時は握りつぶさず throw するが、`run()` は throw 前に summary(items/applied/noref/nojpeg)を組み立ててエラーメッセージへ載せるので、ログ保存に失敗しても「写真に何を適用したか」は失われない。read-only な Output や壊れた既存ファイルではこの throw が毎回出るため、9 の手順で当該ファイルを一度片付けること。
+11. apply パスは plain delay 必須(run loop を pump すると複数枚適用が壊れる): Match Look 適用シーケンス中の待機に `NSRunLoop.runUntilDate` で run loop を pump すると、複数枚適用の 2 枚目以降が着地しない(実機で root cause 確定。過去の smoke が単枚だったため長く未検出だった regression)。適用パスの待機は必ず JXA 組込みの `delay` を使い、run loop を回す `sleep` を適用パスへ再導入しないこと。HUD 描画反映のための pump は `hudPump()`(0.15s の `runUntilDate`)に閉じ込め、HUD 更新ヘルパ(`hudSetItem` / `hudSetPhase` / `hudItemDone`)からのみ呼ぶ(apply の Apple Event と交錯しなければ安全・10枚実機で実証)。同じ制約は `src/matchlook_pipeline.ts` の適用シーケンス冒頭と `hudPump` 定義のコメントにもある。これは項目 3(メニュー enabled ポーリングを固定 delay へ戻さない)とは別問題で、こちらは「適用パスの delay を run loop pump に変えない」。
 
 ## Session Folder Contract
 
