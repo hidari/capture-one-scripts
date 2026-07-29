@@ -56,4 +56,11 @@ local test: Task = new {
   cache = false
 }
 
-tasks { emit; compile; build; sel; install; test }
+local labels: Task = new {
+  name = "labels"
+  description = "Capture One のリソースから Match Look ラベルを抽出して CONFIG 用の断片を出力"
+  cmd = "node scripts/extract_matchlook_labels.mjs"
+  cache = false
+}
+
+tasks { emit; compile; build; sel; install; test; labels }
