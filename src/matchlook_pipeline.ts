@@ -35,12 +35,46 @@ const CONFIG = {
   jpegExts: ["jpg", "jpeg"],
   stripSuffixes: [] as string[],
   // Match Look 用に対象と JPEG を同一コレクションに揃えるための全画像 smart album 名。
-  // UI 言語依存(menuMatchLook と同じ。日本語 UI では「すべてのイメージ」)。
+  // UI 言語依存(日本語 UI では「すべてのイメージ」)。
   allImagesCollection: "すべてのイメージ",
-  menuMatchLook: {
-    menu: "調整",
-    setReference: "セットマッチルックリファレンス",
-    apply: "マッチルックを適用",
+  // Match Look のメニュー項目ラベル候補(Capture One が対応する全言語)。UI 表示言語が
+  // どれであっても、この候補のいずれかに一致する項目を走査で見つける。メニュー名(調整 /
+  // Adjustments 等)は候補に持たず、項目名の一致からメニューごと特定する。
+  // 値の唯一の真実はこのフィールド。散文やドキュメントへ再掲しないこと。
+  // 再生成: pkf run labels(scripts/extract_matchlook_labels.mjs が C1 のリソースから抽出)
+  matchLookLabels: {
+    setReference: [
+      "Set Match Look Reference",
+      "Festlegen der Referenz für Look anpassen",
+      "Establecer referencia para Reproducir Look",
+      "Définir la référence pour répliquer rendu",
+      "Imposta corrispondenza look: riferimenti",
+      "セットマッチルックリファレンス",
+      "매치 룩 레퍼런스 설정",
+      "Referentie voor overeenkomende look instellen",
+      "Ustawianie odniesienia do wyglądu dopasowania",
+      "Definir referência de aparência de correspondência",
+      "Установить эталон Match Look",
+      "Ställ in referens för matchningsutseende",
+      "设置匹配外观参考",
+      "設置匹配外觀參考",
+    ],
+    apply: [
+      "Apply Match Look",
+      "Look anpassen anwenden",
+      "Aplicar Reproducir Look",
+      "Appliquer répliquer rendu",
+      "Applica Riproduci Look",
+      "マッチルックを適用",
+      "매치 룩 적용",
+      "Overeenkomende look toepassen",
+      "Zastosuj wygląd dopasowania",
+      "Aplicar Match Look",
+      "Применить Match Look",
+      "Använd Matcha Utseende",
+      "应用 Match Look",
+      "應用 Match Look",
+    ],
   },
 };
 
@@ -293,15 +327,52 @@ function findMenuCommand(tree: MenuTree, candidates: string[]): MenuCommand | nu
   return null;
 }
 
+// メニューバーの構造を一括取得する。複数形アクセスで 1 メニューあたり 1 イベントに抑える
+// (実機で全 13 メニューの全項目名が 229ms。1 項目ずつ引くと 1 メニューだけで 451ms かかる)。
+function readMenuTree(SE: any): MenuTree {
+  const bar = SE.processes.byName(CONFIG.c1AppName).menuBars[0];
+  const names = bar.menuBarItems.name() as string[];
+  const tree: MenuTree = [];
+  for (let i = 0; i < names.length; i++) {
+    let items: (string | null)[] = [];
+    try {
+      items = bar.menuBarItems[i].menus[0].menuItems.name();
+    } catch (e) {
+      /* 項目を取れないメニューは空のまま続行(全体を止めない) */
+    }
+    tree.push({ menu: String(names[i]), items: items });
+  }
+  return tree;
+}
+
+// Match Look の 2 コマンドを解決する。バッチ開始時に 1 回だけ呼び、ループ内で再走査しない。
+// 2 つは独立に探索する(実機ではどちらも Adjustments にあるが、同一メニューを要求しない)。
+function resolveMatchLookMenu(SE: any): { setReference: MenuCommand; apply: MenuCommand } {
+  const tree = readMenuTree(SE);
+  const setRef = findMenuCommand(tree, CONFIG.matchLookLabels.setReference);
+  const apply = findMenuCommand(tree, CONFIG.matchLookLabels.apply);
+  if (setRef && apply) return { setReference: setRef, apply: apply };
+  const missing: string[] = [];
+  if (!setRef) missing.push("set-reference");
+  if (!apply) missing.push("apply");
+  // 件数 0 なら「メニューが読めていない」、件数はあるのに不一致なら「ラベルが候補に無い」。
+  throw new Error(
+    "Match Look のメニュー項目が見つかりません(" +
+      missing.join(" / ") +
+      ")。Capture One のメニュー構成: " +
+      describeCounts(tree.map((t) => ({ label: t.menu, count: t.items.length }))),
+  );
+}
+
 // メニュー項目を「有効化されるまで待って」クリックする。
 // 実機で判明: select 後にメニューの enabled が更新されるまで非同期の遅延があり、
 // 固定 delay では取りこぼす。enabled をポーリングして true になった瞬間に click する。
-function clickMenuItem(SE: any, menuName: string, itemName: string): void {
+function clickMenuItem(SE: any, cmd: MenuCommand): void {
   for (let t = 0; t < 25; t++) {
     const item = SE.processes
       .byName(CONFIG.c1AppName)
-      .menuBars[0].menuBarItems.byName(menuName)
-      .menus[0].menuItems.byName(itemName);
+      .menuBars[0].menuBarItems.byName(cmd.menu)
+      .menus[0].menuItems.byName(cmd.item);
     let enabled = false;
     try {
       enabled = item.enabled();
@@ -315,7 +386,7 @@ function clickMenuItem(SE: any, menuName: string, itemName: string): void {
     }
     delay(0.2);
   }
-  throw new Error("メニュー項目が有効化されない: " + menuName + " > " + itemName);
+  throw new Error("メニュー項目が有効化されない: " + cmd.menu + " > " + cmd.item);
 }
 
 // 現在の選択を一旦すべて解除し、target だけを選択する。
@@ -329,20 +400,20 @@ function selectOnly(doc: any, variant: C1Variant): void {
 function applyMatchLook_viaMenu(
   C1: any,
   SE: any,
+  cmds: { setReference: MenuCommand; apply: MenuCommand },
   jpegVariant: C1Variant,
   targetVariant: C1Variant,
   onPhase?: (phase: string) => void,
 ): void {
-  const m = CONFIG.menuMatchLook;
   const doc = C1.currentDocument;
   if (onPhase) onPhase("reference"); // フェーズ行を先に更新してから遅いポーリングへ入る
   C1.activate(); // メニュー操作は frontmost の C1 に対して行う
   delay(0.4);
   selectOnly(doc, jpegVariant); // 参照側 JPEG だけを選択
-  clickMenuItem(SE, m.menu, m.setReference); // 参照にセット
+  clickMenuItem(SE, cmds.setReference); // 参照にセット
   if (onPhase) onPhase("apply");
   selectOnly(doc, targetVariant); // 対象 RAW だけを選択
-  clickMenuItem(SE, m.menu, m.apply); // 適用
+  clickMenuItem(SE, cmds.apply); // 適用
 }
 
 // baseName(stripSuffixes 済み・小文字) -> その名前を持つ variant の一覧(variants() 出現順)。
@@ -538,6 +609,10 @@ function run(): string {
     return formatSummary(0, 0, 0, 0);
   }
 
+  // メニューコマンドはバッチ開始時に 1 回だけ解決する(毎枚走査しない)。HUD 生成より前に
+  // 置くのは、解決に失敗したときに HUD を出しっぱなしにしないため。
+  const menuCmds = resolveMatchLookMenu(SE);
+
   // バッチ進捗 HUD(生成失敗時 null で継続。以降 hud* は no-op になる)。
   const hud = createProgressHUD(items.length);
 
@@ -578,7 +653,7 @@ function run(): string {
           // 対象 variant は選択した拡張子で厳密に引き直す(ARW/DNG の取り違え防止)。
           const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
           if (tv) {
-            applyMatchLook_viaMenu(C1, SE, jv, tv, (phase) => hudSetPhase(hud, done, phase));
+            applyMatchLook_viaMenu(C1, SE, menuCmds, jv, tv, (phase) => hudSetPhase(hud, done, phase));
             matchlook = "applied";
           } else {
             matchlook = "no-ref";
