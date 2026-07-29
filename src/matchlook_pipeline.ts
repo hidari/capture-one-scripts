@@ -16,6 +16,13 @@ type ManifestRow = {
 // ext=切替後に対象 variant を厳密に引き直すための拡張子(rawTargetExts のいずれか)。
 type WorkItem = { baseName: string; label: string; ext: string };
 
+// メニューバーの構造スナップショット。セパレータは項目名が null で返るため items は null を含む。
+// string[] と宣言すると代入元が any の都合で tsc が矛盾を検出できず、型が実態について嘘をつく。
+type MenuTree = { menu: string; items: (string | null)[] }[];
+
+// クリック対象を一意に指す組(メニュー名 + 項目名)。
+type MenuCommand = { menu: string; item: string };
+
 // ================= 設定 =================
 const CONFIG = {
   c1AppName: "Capture One",
@@ -249,6 +256,20 @@ function hudClose(hud: any): void {
 }
 
 // ================= Match Look(UI スクリプティング) =================
+
+// 候補ラベルのいずれかと完全一致する項目を持つ最初の (menu, item) を返す。
+// メニュー名はハードコードせずここで探索するため、UI 言語が変わっても引ける。
+// 照合は正規化しない完全一致(部分一致だと "Apply Match Look to Layer" 等を誤って掴む)。
+// セパレータ(null)は読み飛ばし、走査は最後まで続ける。
+function findMenuCommand(tree: MenuTree, candidates: string[]): MenuCommand | null {
+  for (const entry of tree) {
+    for (const item of entry.items) {
+      if (typeof item !== "string") continue;
+      if (candidates.indexOf(item) >= 0) return { menu: entry.menu, item: item };
+    }
+  }
+  return null;
+}
 
 // メニュー項目を「有効化されるまで待って」クリックする。
 // 実機で判明: select 後にメニューの enabled が更新されるまで非同期の遅延があり、

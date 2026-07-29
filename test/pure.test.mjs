@@ -19,6 +19,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
+    "findMenuCommand",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -232,4 +233,64 @@ test("phaseBarValue: フェーズ開始時のバー値(half-item)", () => {
   assert.equal(M.phaseBarValue(1, "apply"), 0.5);
   assert.equal(M.phaseBarValue(3, "reference"), 2);
   assert.equal(M.phaseBarValue(3, "apply"), 2.5);
+});
+
+// findMenuCommand は vm コンテキスト側で新規オブジェクトを生成して返す。vm は別 realm なので
+// その Object.prototype はテスト側(main realm)のものと一致せず、node:assert/strict の
+// deepEqual(= deepStrictEqual)はプロトタイプ不一致で構造が同じでも FAIL する
+// ("same structure but are not reference-equal")。戻り値をスプレッドで main realm の
+// プレーンオブジェクトへ写してから比較し、この realm 差を吸収する(値の比較自体は緩めない)。
+
+test("findMenuCommand: 英語ラベルで解決する", () => {
+  const tree = [
+    { menu: "File", items: ["New Session…", "Open…"] },
+    { menu: "Adjustments", items: ["Reset", null, "Set Match Look Reference", "Apply Match Look"] },
+  ];
+  assert.deepEqual(
+    { ...M.findMenuCommand(tree, ["Set Match Look Reference", "セットマッチルックリファレンス"]) },
+    { menu: "Adjustments", item: "Set Match Look Reference" },
+  );
+});
+
+test("findMenuCommand: 同一の候補配列から日本語ラベルも解決する", () => {
+  // 候補表は全言語ぶんを 1 本に持つ。UI 言語を変えても同じ配列で引けることが要件。
+  const tree = [
+    { menu: "調整", items: ["リセット", null, "セットマッチルックリファレンス", "マッチルックを適用"] },
+  ];
+  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look", "マッチルックを適用"]) }, {
+    menu: "調整",
+    item: "マッチルックを適用",
+  });
+});
+
+test("findMenuCommand: 先頭以外のメニューにある項目も見つける", () => {
+  // 走査を先頭メニューだけに壊す(外側ループを 1 周で抜く)とここが null になり FAIL する(変異検出)。
+  const tree = [
+    { menu: "File", items: ["Open…"] },
+    { menu: "Edit", items: ["Undo"] },
+    { menu: "Adjustments", items: ["Apply Match Look"] },
+  ];
+  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look"]) }, {
+    menu: "Adjustments",
+    item: "Apply Match Look",
+  });
+});
+
+test("findMenuCommand: セパレータ(null)を挟んでも走査を続け後ろの項目を返す", () => {
+  // 肝: null で走査を打ち切る実装(continue を break に変える)だとここが null になり FAIL する(変異検出)。
+  // なお「typeof ガードを外す」変異では赤くならない(candidates.indexOf(null) は -1 で自然に不一致)。
+  // pin しているのはガードの有無ではなく走査の継続である。
+  const tree = [{ menu: "Adjustments", items: [null, "Reset", null, "Apply Match Look"] }];
+  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look"]) }, {
+    menu: "Adjustments",
+    item: "Apply Match Look",
+  });
+});
+
+test("findMenuCommand: 不一致は null(部分一致で誤ヒットしない)", () => {
+  // 完全一致でないと、別項目("Apply Match Look to Layer" 等)を掴んで誤操作する。
+  const tree = [{ menu: "Adjustments", items: ["Apply Match Look to Layer", "Match"] }];
+  assert.equal(M.findMenuCommand(tree, ["Apply Match Look"]), null);
+  assert.equal(M.findMenuCommand([], ["Apply Match Look"]), null);
+  assert.equal(M.findMenuCommand([{ menu: "Adjustments", items: [] }], ["Apply Match Look"]), null);
 });
