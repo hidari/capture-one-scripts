@@ -76,6 +76,28 @@ function extOf(name: string): string {
   return String(name).split(".").pop()!.toLowerCase();
 }
 
+// 最大値の添字を返す(同値は先勝ち)。負値は「件数を取得できなかった」を表す番兵で、
+// 初期値 -1 がそのまま候補外の判定を兼ねる。有効な候補が 1 つも無ければ -1。
+// この -1 は ensureWorkingCollection が異常を throw へ変換する根拠になるので、
+// 初期値を -Infinity 等へ変えてはいけない(全件失敗が先頭コレクションの採用に化ける)。
+function pickLargestIndex(counts: number[]): number {
+  let best = -1;
+  let bestCount = -1;
+  for (let i = 0; i < counts.length; i++) {
+    if (counts[i] > bestCount) {
+      bestCount = counts[i];
+      best = i;
+    }
+  }
+  return best;
+}
+
+// 失敗時の診断用に `名前(件数)` をカンマ区切りで並べた 1 行を返す。
+// メニュー解決の失敗とコレクション選択の失敗の両方で使う(同じ形の診断を二重に書かない)。
+function describeCounts(entries: { label: string; count: number }[]): string {
+  return entries.map((e) => e.label + "(" + e.count + ")").join(", ");
+}
+
 function stripSuffixes(name: string): string {
   for (const suf of CONFIG.stripSuffixes) {
     if (name.endsWith(suf)) return name.slice(0, -suf.length);
