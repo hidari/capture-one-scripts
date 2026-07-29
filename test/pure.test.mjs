@@ -19,7 +19,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
-    "findMenuCommand",
+    "findMenuCommand", "pickLargestIndex", "describeCounts",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -293,4 +293,33 @@ test("findMenuCommand: 不一致は null(部分一致で誤ヒットしない)",
   assert.equal(M.findMenuCommand(tree, ["Apply Match Look"]), null);
   assert.equal(M.findMenuCommand([], ["Apply Match Look"]), null);
   assert.equal(M.findMenuCommand([{ menu: "Adjustments", items: [] }], ["Apply Match Look"]), null);
+});
+
+test("pickLargestIndex: 最大値の添字 / 同値は先勝ち", () => {
+  assert.equal(M.pickLargestIndex([3, 7, 5]), 1);
+  // 肝: 比較を > から >= へ緩めると後勝ちになりここが 2 を返して FAIL する(変異検出)。
+  assert.equal(M.pickLargestIndex([3, 7, 7]), 1);
+  // 0 件のコレクションも有効な候補(負値の番兵とは区別する)。
+  assert.equal(M.pickLargestIndex([0, 0]), 0);
+});
+
+test("pickLargestIndex: 空配列と全負値は -1(番兵)", () => {
+  assert.equal(M.pickLargestIndex([]), -1);
+  // 肝: 負値は「件数を取得できなかった」を表す番兵で候補にしない。初期値を -Infinity に
+  // 変えると [-1,-1,-1] が 0 を返しここが FAIL する(変異検出)。この -1 は
+  // ensureWorkingCollection が「どのコレクションも読めなかった」を throw へ変換する根拠。
+  assert.equal(M.pickLargestIndex([-1, -1, -1]), -1);
+  assert.equal(M.pickLargestIndex([-1, 5, -1]), 1);
+});
+
+test("describeCounts: 診断用の 1 行(名前(件数) をカンマ区切り)", () => {
+  assert.equal(M.describeCounts([]), "");
+  assert.equal(M.describeCounts([{ label: "File", count: 45 }]), "File(45)");
+  assert.equal(
+    M.describeCounts([
+      { label: "Apple", count: 21 },
+      { label: "File", count: 45 },
+    ]),
+    "Apple(21), File(45)",
+  );
 });
