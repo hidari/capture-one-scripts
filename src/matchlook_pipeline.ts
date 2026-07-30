@@ -317,6 +317,11 @@ function hudClose(hud: any): void {
 // メニュー名はハードコードせずここで探索するため、UI 言語が変わっても引ける。
 // 照合は正規化しない完全一致(部分一致だと "Apply Match Look to Layer" 等を誤って掴む)。
 // セパレータ(null)は読み飛ばし、走査は最後まで続ける。
+// この完全一致は将来も緩めないこと: 本リポジトリが Capture One の Scripts メニューへ自身を
+// インストールするエントリ名(Taskfile.pkl の menuName)は CONFIG.matchLookLabels.apply の候補と
+// 1 語違いで、findMenuCommand はメニューバー順で最初の一致を返し readMenuTree は per-メニューの
+// 読み取り失敗を握りつぶすため、前方一致/部分一致に緩めると Adjustments メニューが読めない場合に
+// Scripts メニューの自作エントリを誤って掴みうる。
 function findMenuCommand(tree: MenuTree, candidates: string[]): MenuCommand | null {
   for (const entry of tree) {
     for (const item of entry.items) {
@@ -355,7 +360,10 @@ function resolveMatchLookMenu(SE: any): { setReference: MenuCommand; apply: Menu
   const missing: string[] = [];
   if (!setRef) missing.push("set-reference");
   if (!apply) missing.push("apply");
-  // 件数 0 なら「メニューが読めていない」、件数はあるのに不一致なら「ラベルが候補に無い」。
+  // 件数 0 は「その特定のメニューの項目だけが読めなかった」(readMenuTree の per-メニュー catch で
+  // 吸収された)ことを表す。Accessibility 権限が無い等の全体障害は readMenuTree 冒頭の
+  // menuBars[0] / menuBarItems.name() 読み取りで無条件 throw して先に落ちるため、ここには到達しない
+  // (件数 0 がそのまま権限失敗を意味するわけではない)。件数はあるのに不一致なら「ラベルが候補に無い」。
   throw new Error(
     "Match Look のメニュー項目が見つかりません(" +
       missing.join(" / ") +
@@ -677,7 +685,8 @@ function run(): string {
   // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
   try {
     ensureWorkingCollection(C1, items);
-    // variant 索引は遅延メモ化する。1 件も対象が無ければ doc.variants() を一度も引かない。
+    // variant 索引は遅延メモ化する。対象 0 件は run() が既に早期 return 済みでここへは来ないため、
+    // ここでの意味はループの都度ではなくバッチ全体で doc.variants() の全走査を 1 回に抑えること。
     let variantIndexCache: VariantIndex | null = null;
     const getVariantIndex = (): VariantIndex => {
       if (variantIndexCache) return variantIndexCache;

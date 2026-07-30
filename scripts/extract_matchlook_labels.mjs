@@ -42,6 +42,7 @@ function collect() {
     for (const raw of readFileSync(path, "utf8").split("\n")) {
       const m = LINE.exec(raw.trim());
       if (!m) continue;
+      if (!m[2]) continue; // 空値("")はメニュー項目名になり得ないため候補に含めない
       for (const field of Object.keys(KEYS)) {
         if (m[1] !== KEYS[field]) continue;
         if (seen[field].has(m[2])) continue;
