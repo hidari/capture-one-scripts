@@ -35,7 +35,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ### タスク2 — Match Look 適用(UI スクリプティング一択)
 
-辞書に `match look` 相当のコマンドは無い(辞書を全走査して確認済み。辞書は各自 C1 の Script Editor / Open Scripting Dictionary で開く)。`copyAdjustments` / `applyAdjustments` は全調整の丸コピーで別機能。実機でも Match Look は AdjustmentSettings に直接値を書き style としては残らない。よって `applyMatchLook_viaMenu()`(メニュークリック)が唯一の経路。JPEG を単独選択 → `CONFIG.matchLookLabels.setReference` に一致するメニュー項目をクリック → 対象を単独選択 → `CONFIG.matchLookLabels.apply` に一致するメニュー項目をクリック(メニュー名はハードコードせず項目名の一致から特定する。Task 4 参照)。
+辞書に `match look` 相当のコマンドは無い(辞書を全走査して確認済み。辞書は各自 C1 の Script Editor / Open Scripting Dictionary で開く)。`copyAdjustments` / `applyAdjustments` は全調整の丸コピーで別機能。実機でも Match Look は AdjustmentSettings に直接値を書き style としては残らない。よって `applyMatchLook_viaMenu()`(メニュークリック)が唯一の経路。JPEG を単独選択 → `CONFIG.matchLookLabels.setReference` に一致するメニュー項目をクリック → 対象を単独選択 → `CONFIG.matchLookLabels.apply` に一致するメニュー項目をクリック(メニュー名はハードコードせず、候補ラベルに一致する項目を持つメニューを `findMenuCommand()` が走査して特定する)。
 
 実機検証で判明した2つの重要事実(いずれも実データの通し実行で確定):
 
