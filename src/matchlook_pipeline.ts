@@ -318,8 +318,8 @@ function hudClose(hud: any): void {
 // 照合は正規化しない完全一致(部分一致だと "Apply Match Look to Layer" 等を誤って掴む)。
 // セパレータ(null)は読み飛ばし、走査は最後まで続ける。
 // この完全一致は将来も緩めないこと: 本リポジトリが Capture One の Scripts メニューへ自身を
-// インストールするエントリ名(Taskfile.pkl の menuName)は CONFIG.matchLookLabels.apply の候補と
-// 1 語違いで、findMenuCommand はメニューバー順で最初の一致を返し readMenuTree は per-メニューの
+// インストールするエントリ名(Taskfile.pkl の menuName)は CONFIG.matchLookLabels.apply の候補に
+// 2 語足しただけで、findMenuCommand はメニューバー順で最初の一致を返し readMenuTree は per-メニューの
 // 読み取り失敗を握りつぶすため、前方一致/部分一致に緩めると Adjustments メニューが読めない場合に
 // Scripts メニューの自作エントリを誤って掴みうる。
 function findMenuCommand(tree: MenuTree, candidates: string[]): MenuCommand | null {

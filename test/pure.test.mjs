@@ -240,16 +240,21 @@ test("phaseBarValue: フェーズ開始時のバー値(half-item)", () => {
 // deepEqual(= deepStrictEqual)はプロトタイプ不一致で構造が同じでも FAIL する
 // ("same structure but are not reference-equal")。戻り値をスプレッドで main realm の
 // プレーンオブジェクトへ写してから比較し、この realm 差を吸収する(値の比較自体は緩めない)。
+// 回避策を 1 箇所に閉じ込めるため以下のヘルパ経由で比較する。null 回帰は `{ ...null }` が `{}` に
+// なり期待値と構造が食い違うので引き続き捕捉できる(assertion は弱まらない)。
+function assertMenuCommand(actual, expected) {
+  assert.deepEqual({ ...actual }, expected);
+}
 
 test("findMenuCommand: 英語ラベルで解決する", () => {
   const tree = [
     { menu: "File", items: ["New Session…", "Open…"] },
     { menu: "Adjustments", items: ["Reset", null, "Set Match Look Reference", "Apply Match Look"] },
   ];
-  assert.deepEqual(
-    { ...M.findMenuCommand(tree, ["Set Match Look Reference", "セットマッチルックリファレンス"]) },
-    { menu: "Adjustments", item: "Set Match Look Reference" },
-  );
+  assertMenuCommand(M.findMenuCommand(tree, ["Set Match Look Reference", "セットマッチルックリファレンス"]), {
+    menu: "Adjustments",
+    item: "Set Match Look Reference",
+  });
 });
 
 test("findMenuCommand: 同一の候補配列から日本語ラベルも解決する", () => {
@@ -257,7 +262,7 @@ test("findMenuCommand: 同一の候補配列から日本語ラベルも解決す
   const tree = [
     { menu: "調整", items: ["リセット", null, "セットマッチルックリファレンス", "マッチルックを適用"] },
   ];
-  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look", "マッチルックを適用"]) }, {
+  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look", "マッチルックを適用"]), {
     menu: "調整",
     item: "マッチルックを適用",
   });
@@ -270,7 +275,7 @@ test("findMenuCommand: 先頭以外のメニューにある項目も見つける
     { menu: "Edit", items: ["Undo"] },
     { menu: "Adjustments", items: ["Apply Match Look"] },
   ];
-  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look"]) }, {
+  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look"]), {
     menu: "Adjustments",
     item: "Apply Match Look",
   });
@@ -281,7 +286,7 @@ test("findMenuCommand: セパレータ(null)を挟んでも走査を続け後ろ
   // なお「typeof ガードを外す」変異では赤くならない(candidates.indexOf(null) は -1 で自然に不一致)。
   // pin しているのはガードの有無ではなく走査の継続である。
   const tree = [{ menu: "Adjustments", items: [null, "Reset", null, "Apply Match Look"] }];
-  assert.deepEqual({ ...M.findMenuCommand(tree, ["Apply Match Look"]) }, {
+  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look"]), {
     menu: "Adjustments",
     item: "Apply Match Look",
   });
