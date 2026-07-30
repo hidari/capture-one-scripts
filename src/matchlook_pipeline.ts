@@ -36,9 +36,6 @@ const CONFIG = {
   rawTargetExts: ["dng", "arw"],
   jpegExts: ["jpg", "jpeg"],
   stripSuffixes: [] as string[],
-  // Match Look 用に対象と JPEG を同一コレクションに揃えるための全画像 smart album 名。
-  // UI 言語依存(日本語 UI では「すべてのイメージ」)。
-  allImagesCollection: "すべてのイメージ",
   // Match Look のメニュー項目ラベル候補(Capture One が対応する全言語)。UI 表示言語が
   // どれであっても、この候補のいずれかに一致する項目を走査で見つける。メニュー名(調整 /
   // Adjustments 等)は候補に持たず、項目名の一致からメニューごと特定する。
@@ -460,31 +457,77 @@ function findVariantInIndex(
   return null;
 }
 
-// 全画像 smart album を currentCollection に設定し、対象と JPEG を同一コレクションに揃える。
-// 実機で判明: variants() は current collection スコープ。対象フォルダだけ見ていると JPEG が
-// variants() に載らず Match Look の参照 variant を引けない。全画像ビューへ切り替えて解決する。
-function ensureAllImagesCollection(C1: any): void {
+// 対象と JPEG を同一コレクションに揃える。variants() は current collection スコープなので、
+// 対象のコレクションだけをブラウズ中だと JPEG が載らず Match Look の参照を引けない。
+//
+// 切替先は名前ではなく「ゴミ箱を除いて variant 数が最大」で決める(UI 言語に依存しない)。
+// ただし「最大 = 全画像コレクション」とは限らないため、切替後に対象を select して
+// 実際に作業可能であることを確認する。current collection 外の variant は C1 が select を
+// 拒否するので、成否がそのまま「切替先が対象を含むか」の判定になる。名前照合を撤去しても
+// 黙って誤ったコレクションで処理を続ける状態には落とさない。
+function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   const doc = C1.currentDocument;
   const cols = doc.collections();
+  const candidates: any[] = [];
+  const ids: string[] = [];
+  const entries: { label: string; count: number }[] = [];
+  const counts: number[] = [];
   for (let i = 0; i < cols.length; i++) {
+    let id = "";
+    let name = "?";
     try {
-      if (
-        String(cols[i].kind()) === "smart album" &&
-        String(cols[i].name()) === CONFIG.allImagesCollection
-      ) {
-        doc.currentCollection = cols[i];
-        delay(0.5);
-        return;
-      }
+      id = String(cols[i].id());
+      name = String(cols[i].name());
     } catch (e) {
-      /* 次の候補へ */
+      /* 読めなくても候補には残す(件数側で弾く) */
     }
+    // ゴミ箱は言語非依存の id で除外する。大量カリング後は全画像より大きくなりうるため。
+    if (id === "trash") continue;
+    let n = -1;
+    try {
+      n = cols[i].variants().length;
+    } catch (e) {
+      /* 件数を取れないものは -1(候補外の番兵) */
+    }
+    candidates.push(cols[i]);
+    ids.push(id);
+    entries.push({ label: name, count: n });
+    counts.push(n);
   }
-  throw new Error(
-    "全画像コレクション「" +
-      CONFIG.allImagesCollection +
-      "」が見つかりません。CONFIG.allImagesCollection を C1 の表示言語に合わせてください。",
-  );
+
+  const pick = pickLargestIndex(counts);
+  if (pick < 0) {
+    throw new Error("切替先のコレクションを決められません。候補: " + describeCounts(entries));
+  }
+
+  // 既に切替先を見ているなら何もしない(選択元のコレクションなので対象を含むことは自明)。
+  // 同名のコレクションが複数ありうるため、比較は名前ではなく id で行う。
+  let currentId = "";
+  try {
+    currentId = String(doc.currentCollection().id());
+  } catch (e) {
+    /* 取れなければ切替を行う(安全側) */
+  }
+  if (currentId && currentId === ids[pick]) return;
+
+  doc.currentCollection = candidates[pick];
+  delay(0.5); // 切替の反映待ち。plain delay を使う(run loop を pump しない)
+
+  // 安全弁: 対象が本当にこのコレクションに居ることを確認する。
+  try {
+    doc.select({ variant: items[0].variant });
+  } catch (e) {
+    throw new Error(
+      "切替先コレクション「" +
+        entries[pick].label +
+        "」で対象を選択できません(" +
+        String(e) +
+        ")。候補: " +
+        describeCounts(entries),
+    );
+  }
+  const selected = doc.variants.whose({ selected: true })();
+  if (selected.length) doc.deselect({ variants: selected });
 }
 
 // C1 で現在選択中の対象 variant を WorkItem として返す。parentImage 拡張子が rawTargetExts の
@@ -619,8 +662,8 @@ function run(): string {
   // バッチ進捗 HUD(生成失敗時 null で継続。以降 hud* は no-op になる)。
   const hud = createProgressHUD(items.length);
 
-  // ペアリングも Match Look も All Images コレクション基準のため、常に全画像ビューへ切り替える。
-  // 切替前に元コレクションを控え、処理後に必ず戻す。
+  // ペアリングも Match Look も対象と JPEG を同一コレクションで引くため、ゴミ箱を除いて
+  // variant 数が最大のコレクションへ切り替える。切替前に元コレクションを控え、処理後に必ず戻す。
   let originalCollection: any = null;
   try {
     originalCollection = C1.currentDocument.currentCollection();
@@ -629,10 +672,10 @@ function run(): string {
   }
   const rows: ManifestRow[] = [];
 
-  // 全画像コレクションへの切替と本処理を try で囲む。createProgressHUD の後に throw しうる文を
+  // コレクション切替と本処理を try で囲む。createProgressHUD の後に throw しうる文を
   // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
   try {
-    ensureAllImagesCollection(C1);
+    ensureWorkingCollection(C1, items);
     // variant 索引は遅延メモ化する。1 件も対象が無ければ doc.variants() を一度も引かない。
     let variantIndexCache: VariantIndex | null = null;
     const getVariantIndex = (): VariantIndex => {
