@@ -12,9 +12,11 @@ type ManifestRow = {
   matchlook: "applied" | "no-ref" | "-";
 };
 
-// 処理対象の正規化単位。baseName=照合用(stripSuffixes 済み・小文字)、label=ログ表示用(原名)、
-// ext=切替後に対象 variant を厳密に引き直すための拡張子(rawTargetExts のいずれか)。
-type WorkItem = { baseName: string; label: string; ext: string };
+// 処理対象の正規化単位。baseName=JPEG 照合用(stripSuffixes 済み・小文字)、label=ログ表示用(原名)、
+// variant=選択時点の参照。コレクション切替後もこの参照はそのまま select に使えるため(実機で確認)、
+// 切替後に索引から引き直さない。引き直すと切替先に同名の別 variant(ゴミ箱へ送った旧 DNG や
+// 書き出し済み JPEG など)が居たとき対象を取り違える。
+type WorkItem = { baseName: string; label: string; variant: C1Variant };
 
 // メニューバーの構造スナップショット。セパレータは項目名が null で返るため items は null を含む。
 // string[] と宣言すると代入元が any の都合で tsc が矛盾を検出できず、型が実態について嘘をつく。
@@ -487,6 +489,7 @@ function ensureAllImagesCollection(C1: any): void {
 
 // C1 で現在選択中の対象 variant を WorkItem として返す。parentImage 拡張子が rawTargetExts の
 // ものだけ拾う。currentCollection 切替で選択は失われるため切替の前に呼んで確定する。
+// variant 参照をそのまま持ち回るので、拡張子は受理判定にのみ使い WorkItem には残さない。
 function selectedTargetItems(C1: any): WorkItem[] {
   const doc = C1.currentDocument;
   const sel = doc.variants.whose({ selected: true })() as C1Variant[];
@@ -503,7 +506,7 @@ function selectedTargetItems(C1: any): WorkItem[] {
       continue;
     }
     if (CONFIG.rawTargetExts.indexOf(ext) >= 0) {
-      out.push({ baseName: normalizeBase(nm), label: imgName, ext: ext });
+      out.push({ baseName: normalizeBase(nm), label: imgName, variant: v });
     }
   }
   return out;
@@ -650,14 +653,9 @@ function run(): string {
         const jv = findVariantInIndex(vi, it.baseName, CONFIG.jpegExts);
         if (jv) {
           jpegLabel = String(jv.parentImage().name());
-          // 対象 variant は選択した拡張子で厳密に引き直す(ARW/DNG の取り違え防止)。
-          const tv = findVariantInIndex(vi, it.baseName, [it.ext]);
-          if (tv) {
-            applyMatchLook_viaMenu(C1, SE, menuCmds, jv, tv, (phase) => hudSetPhase(hud, done, phase));
-            matchlook = "applied";
-          } else {
-            matchlook = "no-ref";
-          }
+          // 対象 variant は選択時点の参照をそのまま使う(索引から引き直さない)。
+          applyMatchLook_viaMenu(C1, SE, menuCmds, jv, it.variant, (phase) => hudSetPhase(hud, done, phase));
+          matchlook = "applied";
         }
         // JPEG が見つからなければ matchlook は初期値 "-" のまま(集計時に nojpeg 扱い)。
       } catch (e) {
