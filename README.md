@@ -38,7 +38,7 @@ pkf run sel    # apply Match Look to the target(s) currently selected in Capture
 
 ## Session folder contract
 
-There is no required folder layout. What matters is that the RAW target and its creative-look JPEG are both imported into the same Capture One session as same-basename variants (the accepted RAW extensions are defined in `CONFIG.rawTargetExts`). PureRAW is optional: with PureRAW the target is the denoised DNG; without it, select the ARW directly. The script locates the pair itself by switching to the All Images smart album, matching basenames, applying Match Look, and restoring the original collection afterward.
+There is no required folder layout. What matters is that the RAW target and its creative-look JPEG are both imported into the same Capture One session as same-basename variants (the accepted RAW extensions are defined in `CONFIG.rawTargetExts`). PureRAW is optional: with PureRAW the target is the denoised DNG; without it, select the ARW directly. The script locates the pair itself by switching to the collection with the most variants (excluding the trash), matching basenames, applying Match Look, and restoring the original collection afterward.
 
 Pairing results are appended to a log at a fixed path relative to the session root:
 
@@ -46,13 +46,13 @@ Pairing results are appended to a log at a fixed path relative to the session ro
 |---|---|
 | `Output/matchlook_pairs.tsv` | Pairing log, appended to on every run (header written once) |
 
-Each row records the run timestamp, the target's name, the matched JPEG's name (or `-` if none was found), and whether Match Look was applied, the target variant could not be resolved or applying Match Look failed (`no-ref`), or no matching JPEG was found (`-`). No images are copied, so large sessions add no storage cost.
+Each row records the run timestamp, the target's name, the matched JPEG's name (or `-` if none was found), and whether Match Look was applied, applying Match Look failed after a JPEG was found (`no-ref`), or no matching JPEG was found (`-`). No images are copied, so large sessions add no storage cost.
 
 ## How it works
 
 1. Selection. The script reads the variant(s) currently selected in Capture One's browser, keeping only those whose parent image extension matches `CONFIG.rawTargetExts`.
-2. Collection switch. Because `variants()` is scoped to the current collection, the script switches to the all-images smart album so the target and its JPEG are both visible together, then restores the original collection afterward.
-3. Match Look. Capture One's scripting dictionary has no Match Look command, so the script drives the UI: it selects the reference JPEG, clicks Adjustments > Set Match Look Reference, selects the target, and clicks Adjustments > Apply Match Look. In the all-images view the same base name can appear under more than one extension, so variants are disambiguated by the parent image's extension.
+2. Collection switch. Because `variants()` is scoped to the current collection, the script switches to the collection with the most variants (excluding the trash) so the target and its JPEG are both visible together, then restores the original collection afterward.
+3. Match Look. Capture One's scripting dictionary has no Match Look command, so the script drives the UI: it selects the reference JPEG, clicks Adjustments > Set Match Look Reference, selects the target, and clicks Adjustments > Apply Match Look. The same base name can appear under more than one extension in that collection, so the script disambiguates the JPEG lookup by the parent image's extension; the target itself is kept as the direct variant reference from the initial selection rather than looked up again.
 4. Log. The pairing result for each target is appended to `Output/matchlook_pairs.tsv` (see above).
 
 ## Scripting dictionary
@@ -78,10 +78,10 @@ Then relaunch Capture One and run the script once to grant access.
 
 ## Known limitations
 
-- Match Look is not in the scripting dictionary. The UI menu route is the only path, and it requires Accessibility permission for the launcher. The menu labels are UI-language dependent (`CONFIG.menuMatchLook`).
-- All-images collection dependency. Because `variants()` is scoped to the current collection, the script switches to an all-images smart album whose name is UI-language dependent (`CONFIG.allImagesCollection`, e.g. the Japanese "すべてのイメージ"). Set it to match your Capture One display language.
+- Match Look is not in the scripting dictionary. The UI menu route is the only path, and it requires Accessibility permission for the launcher. Menu labels are resolved at runtime by matching against a candidate list covering every language Capture One ships (`CONFIG.matchLookLabels`, regenerate with `pkf run labels`), so the display language does not matter.
+- Collection switching. Because `variants()` is scoped to the current collection, the script switches to the largest collection excluding the trash. This is language independent, but it assumes that collection holds the reference JPEG. After switching, the script verifies the target can be selected there and fails loudly with a diagnostic if it cannot.
 - Menu enablement is asynchronous. After selecting a variant, the target menu item becomes enabled with a delay, so the script polls the enabled state before clicking rather than using a fixed delay.
-- Same-basename collisions. The all-images view can show the same base name under multiple extensions; the script disambiguates by the parent image's extension, and this must be preserved in any refactor.
+- Same-basename collisions. The working collection can show the same base name under multiple extensions; the script disambiguates the JPEG lookup by the parent image's extension, and this must be preserved in any refactor (the target is not looked up from the index, so this only affects resolving the JPEG).
 - PureRAW suffixes. If your PureRAW output DNGs carry a suffix, add it to `CONFIG.stripSuffixes` (for example `['-dxo']`) so the base names match.
 - The PureRAW hand-off stage (sending RAWs to PureRAW) is not implemented.
 - Match Look writes directly into the target's adjustment settings (it does not remain as a reusable style, and undo is murky). Back up the session `.cosessiondb` (or enable Time Machine) before running on a session that already contains adjustments you want to keep.
