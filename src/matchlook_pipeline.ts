@@ -2,8 +2,8 @@
 
 // Capture One 用 JXA パイプライン(TypeScript ソース / 単一ファイル・import 禁止)。
 // C1 で選択中の RAW 対象に、同名の creative-look JPEG の look を Match Look(メニュー操作)で
-// 転写する。ペアリングは C1 の All Images コレクション基準で行い、フォルダ構成や PureRAW の
-// 有無に依存しない。処理結果は追記ログ(TSV)へ残す。
+// 転写する。ペアリングは対象と JPEG を同一コレクション(ゴミ箱を除いて variant 数が最大のもの)に
+// 揃えて行い、フォルダ構成や PureRAW の有無に依存しない。処理結果は追記ログ(TSV)へ残す。
 
 // manifest 1 行の正規化単位。target=対象の原名、jpeg=参照 JPEG の原名(無ければ null)。
 type ManifestRow = {
@@ -139,9 +139,10 @@ function stripSuffixes(name: string): string {
 }
 
 // 照合キーの正規化。小文字化してから PureRAW サフィックスを剥がす。索引側(buildVariantIndex)と
-// 選択側(selectedTargetItems)で必ずこの順序を通す。順序が逆(strip -> lower)だと stripSuffixes の
-// endsWith が大文字小文字で取りこぼし、索引キーと照合キーが食い違って対象自身の variant を引けず
-// no-ref に落ちる(例: ファイル名 IMG-DxO と CONFIG.stripSuffixes=['-dxo'] で不一致)。
+// 照合側(selectedTargetItems の baseName)で必ずこの順序を通す。順序が逆(strip -> lower)だと
+// stripSuffixes の endsWith が大文字小文字で取りこぼし、索引キーと照合キーが食い違う。対象 variant は
+// 索引を経由しないため影響を受けないが、JPEG 側は索引から引くため jv が null になり matchlook は
+// "-"(nojpeg)のままになる(例: ファイル名 IMG-DxO と CONFIG.stripSuffixes=['-dxo'] で不一致)。
 function normalizeBase(name: string): string {
   return stripSuffixes(name.toLowerCase());
 }
@@ -419,7 +420,7 @@ function applyMatchLook_viaMenu(
 type VariantIndex = Record<string, { ext: string; variant: C1Variant }[]>;
 
 // doc.variants() を 1 回だけ全走査して baseName ごとに索引化する。
-// All Images には同名の ARW+JPG+DNG が並ぶため parentImage の拡張子も併せて持つ。
+// 切替先コレクションには同名の ARW+JPG+DNG が並びうるため parentImage の拡張子も併せて持つ。
 function buildVariantIndex(C1: any): VariantIndex {
   const doc = C1.currentDocument;
   // filename 由来の base をキーにするため null-proto オブジェクトを使う。通常の {} だと

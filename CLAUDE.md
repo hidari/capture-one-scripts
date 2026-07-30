@@ -25,13 +25,13 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ## Architecture
 
-設定は冒頭の `CONFIG` に集約。主要フィールド: `manifestSubpath`(Output/matchlook_pairs.tsv・追記ログの出力先)/ `rawTargetExts`(Match Look 対象として受理する拡張子。受理拡張子の唯一の真実はこのフィールド自体であり散文へ列挙しない)/ `jpegExts` / `stripSuffixes`(PureRAW サフィックス)/ `allImagesCollection`(全画像 smart album 名・UI 言語依存)/ `menuMatchLook`(メニューラベル・UI 言語依存)。
+設定は冒頭の `CONFIG` に集約。主要フィールド: `manifestSubpath`(Output/matchlook_pairs.tsv・追記ログの出力先)/ `rawTargetExts`(Match Look 対象として受理する拡張子。受理拡張子の唯一の真実はこのフィールド自体であり散文へ列挙しない)/ `jpegExts` / `stripSuffixes`(PureRAW サフィックス)/ `matchLookLabels`(Match Look のメニュー項目ラベル候補・全言語ぶん。値の唯一の真実はこのフィールドで散文へ列挙しない。再生成は `pkf run labels`)。
 
 ペアリングと Match Look 適用は常に実行される単一モード。旧 `SCOPE`(all/sel)・`MATCHLOOK`(true/false)env による切替は撤廃した。
 
-### タスク1 — ペアリング(All Images コレクション基準)
+### タスク1 — ペアリング(切替先コレクション基準)
 
-`selectedTargetItems()` が(currentCollection 切替前に)選択中の variant を読み、`parentImage` の拡張子が `CONFIG.rawTargetExts` に含まれるものだけ WorkItem 化する(`baseName` は `stripSuffixes` 適用後・小文字、`ext` は選択時点の拡張子)。切替後、`buildVariantIndex()` が `doc.variants()` を1回だけ全走査して `baseName` ごとに `{ext, variant}` の配列へ索引化する(All Images には同名の ARW/JPG/DNG が並ぶため `ext` を保持する)。`findVariantInIndex()` は `baseName` + 期待拡張子群で検索し、出現順で最初に一致した variant を返す(同名衝突時の先勝ち)。JPEG は `CONFIG.jpegExts` で、対象は選択時点の `ext` 一本で引き直す(ARW/DNG の取り違え防止)。
+`selectedTargetItems()` が(currentCollection 切替前に)選択中の variant を読み、`parentImage` の拡張子が `CONFIG.rawTargetExts` に含まれるものだけ WorkItem 化する(`baseName` は `stripSuffixes` 適用後・小文字、`variant` は選択時点の参照)。切替前に取得した variant 参照は切替後の `select` でもそのまま有効なため、対象は索引から引き直さない。JPEG のみ `CONFIG.jpegExts` で索引から引く。索引(`buildVariantIndex()`)は JPEG を引くためだけに `doc.variants()` を1回だけ全走査して `baseName` ごとに `{ext, variant}` の配列を作り、`parentImage` の拡張子で弁別する(同名の JPEG/RAW が並ぶ環境があるため)。`findVariantInIndex()` は出現順で最初に一致した variant を返す(同名衝突時の先勝ち)。
 
 ### タスク2 — Match Look 適用(UI スクリプティング一択)
 
@@ -39,21 +39,21 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 実機検証で判明した2つの重要事実(いずれも実データの通し実行で確定):
 
-- `variants()` は current collection スコープ。対象のコレクションだけをブラウズ中は JPEG が variants() に載らず、Match Look の参照 variant を引けない。そこで `ensureAllImagesCollection()` が `currentCollection` を全画像 smart album(`CONFIG.allImagesCollection`)へ設定して対象+JPEG を同一コレクションに揃え、処理後に元のコレクションへ戻す。対象と JPEG が同一セッションに import 済みであれば、ユーザーの手動お気に入り操作は不要。All Images には ARW+JPG+DNG が同名で並ぶため、拡張子弁別が必須。
+- `variants()` は current collection スコープ。対象のコレクションだけをブラウズ中は JPEG が variants() に載らず、Match Look の参照 variant を引けない。そこで `ensureWorkingCollection()` が `currentCollection` を「ゴミ箱を除いて variant 数が最大のコレクション」へ設定して対象+JPEG を同一コレクションに揃え、処理後に元のコレクションへ戻す。対象と JPEG が同一セッションに import 済みであれば、ユーザーの手動お気に入り操作は不要。切替先には ARW/JPG/DNG が同名で並びうるが、拡張子弁別が必須なのは索引から引く JPEG 側だけ(対象は選択時点の variant 参照をそのまま使うため索引を経由しない)。
 - メニューの enabled 更新は非同期に遅延する。`d.select` 後すぐにメニューをクリックすると disabled で失敗する。`clickMenuItem()` は enabled をポーリング(最大約5秒)して true になった瞬間に click する。
 
-`findVariantInIndex()` は `buildVariantIndex()` が事前に索引化した `baseName` ごとの `{ext, variant}` 一覧から、期待拡張子(`CONFIG.jpegExts` または対象の `ext`)に一致する最初の variant を返す。索引化自体は `variant.name()`(拡張子なし・RAW/JPEG/DNG 同名)を `parentImage().name()` の拡張子で弁別して行う。これを怠ると同名衝突で自己適用の no-op になる。
+`findVariantInIndex()` は `buildVariantIndex()` が事前に索引化した `baseName` ごとの `{ext, variant}` 一覧から、期待拡張子(`CONFIG.jpegExts`)に一致する最初の variant を返す(JPEG 引きにのみ使う。対象は索引を経由しない)。索引化自体は `variant.name()`(拡張子なし・RAW/JPEG/DNG 同名)を `parentImage().name()` の拡張子で弁別して行う。これを怠ると同名衝突で自己適用の no-op になる。
 
 ### タスク3 — ペアリング追記ログ
 
-画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。書き込みは do shell script ではなくネイティブ ObjC(Foundation の NSFileManager/NSString)で read-modify-write し、時刻も `formatStamp()` でネイティブ生成する(理由は Known Limitations 8)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(JPEG は見つかったが対象 variant を引けなかった、または Match Look 適用に失敗した)/ `-`(JPEG が見つからなかった)のいずれか。
+画像コピーは行わない。ペアリング結果を追記ログ(TSV: `time` / `target` / `jpeg` / `matchlook`)として `Output/matchlook_pairs.tsv` へ追記する。ヘッダはファイル新規時のみ `manifestHeaderLines()` で1回書き、以降は `appendManifest()` が行だけ追記する(上書きしない)。書き込みは do shell script ではなくネイティブ ObjC(Foundation の NSFileManager/NSString)で read-modify-write し、時刻も `formatStamp()` でネイティブ生成する(理由は Known Limitations 8)。大量セッションで JPEG を複製しないため容量負担が無い。`matchlook` は `applied`(適用済み)/ `no-ref`(JPEG は見つかったが Match Look の適用に失敗した)/ `-`(JPEG が見つからなかった)のいずれか。
 
 ## Known Limitations / Open Items
 
-1. Match Look は辞書に無い(確定・実機で全件検証済み): Route B メニュークリックが唯一。過去に一括76枚へ適用し look 変化を目視確認済み(現在の sel 単一モードでも同一経路を通る)。前提は launcher への Accessibility 権限。ラベルは `CONFIG.menuMatchLook`。
-2. 全画像コレクション依存: `variants()` が current collection スコープのため、`CONFIG.allImagesCollection`(UI 言語依存)の smart album へ切替が必要。名前が違う環境では CONFIG を合わせる。
+1. Match Look は辞書に無い(確定・実機で全件検証済み): Route B メニュークリックが唯一。過去に一括76枚へ適用し look 変化を目視確認済み(現在の sel 単一モードでも同一経路を通る)。前提は launcher への Accessibility 権限。ラベル候補は `CONFIG.matchLookLabels`。
+2. 切替先コレクションの推定: `variants()` が current collection スコープのため、対象と JPEG を同一コレクションに揃える切替が要る。切替先は「ゴミ箱を除いて variant 数が最大」で選ぶので UI 言語には依存しないが、「最大のコレクションが参照 JPEG を含む」ことは前提として残る。切替後に対象を `select` して妥当性を検証するため、対象を含まないコレクションを選んだ場合は診断付きで throw する(黙って nojpeg にはならない)。JPEG だけを含まない場合は検証を通過し全件 nojpeg になる。固定名を採らないのはコレクション名自体が UI 言語に依存するだけでなく、セッション作成時点の表示言語でスマートアルバム名が固定され、後から表示言語を切り替えても追従しないため(実機確認: 日本語 UI で作成したセッションは表示言語を英語に変えても元の日本語名のまま)。同一マシン上に言語の異なる名前のセッションが混在しうるため、どの固定名を選んでも原理的に対応できない。
 3. メニュー enabled ポーリング: select 後のメニュー有効化遅延に対応するため必須。固定 delay に戻さないこと。
-4. 同名衝突の拡張子弁別: `buildVariantIndex` / `findVariantInIndex` の `parentImage().name()` 拡張子フィルタを移植/改修で必ず維持する。
+4. 同名衝突の拡張子弁別(JPEG 引きのみ): `buildVariantIndex` / `findVariantInIndex` の `parentImage().name()` 拡張子フィルタを移植/改修で必ず維持する。対象 variant は選択時点の参照を持ち回るため索引を経由しないが、JPEG は索引から引くのでこの弁別が要る。
 5. PureRAW のサフィックス: 出力 DNG にサフィックスが付く場合は `CONFIG.stripSuffixes` に追加(例: `['-dxo']`)。
 6. 前段(PureRAW 送り)未実装: `open -a "DxO PureRAW" <RAWパス>` 案があるが無人バッチ完了は未確認。
 7. 破壊的適用前のバックアップ: Match Look 適用は AdjustmentSettings に直接値を書き既存調整を上書きする(style として残らず undo も濁りやすい)。調整済み対象を含むセッションで実行する前に、Capture One セッションの `.cosessiondb` をバックアップするか対象 variant を複製すること。Time Machine 有効化も推奨(実データで既存調整を上書きし復旧困難になった事例あり)。
@@ -61,10 +61,11 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 9. 旧ビルドで壊れた manifest の一度きり復旧: かつて `readTextFile` が `String(NSString)` を使い中身でなく `"[id __NSCFString]"` を返していたため、旧ビルドで2回目以降に実行したセッションの `Output/matchlook_pairs.tsv` は先頭に `[id __NSCFString]` が残りヘッダを失っている場合がある。現行コードは中身を正しく読むが `existing` があれば末尾へ追記するだけで前方修正しかしない(壊れた先頭は自動修復しない)。該当ファイルは一度 `rm` するか手で直せば、次回実行時にヘッダから作り直される。
 10. manifest 書き込みは post-batch(fail-loud の位置づけ): `appendManifest` は Match Look 適用ループの後に呼ぶ実行後ログで、事前監査には使えない。IO 失敗時は握りつぶさず throw するが、`run()` は throw 前に summary(items/applied/noref/nojpeg)を組み立ててエラーメッセージへ載せるので、ログ保存に失敗しても「写真に何を適用したか」は失われない。read-only な Output や壊れた既存ファイルではこの throw が毎回出るため、9 の手順で当該ファイルを一度片付けること。
 11. apply パスは plain delay 必須(run loop を pump すると複数枚適用が壊れる): Match Look 適用シーケンス中の待機に `NSRunLoop.runUntilDate` で run loop を pump すると、複数枚適用の 2 枚目以降が着地しない(実機で root cause 確定。過去の smoke が単枚だったため長く未検出だった regression)。適用パスの待機は必ず JXA 組込みの `delay` を使い、run loop を回す `sleep` を適用パスへ再導入しないこと。HUD 描画反映のための pump は `hudPump()`(0.15s の `runUntilDate`)に閉じ込め、HUD 更新ヘルパ(`hudSetItem` / `hudSetPhase` / `hudItemDone`)からのみ呼ぶ(apply の Apple Event と交錯しなければ安全・10枚実機で実証)。同じ制約は `src/matchlook_pipeline.ts` の適用シーケンス冒頭と `hudPump` 定義のコメントにもある。これは項目 3(メニュー enabled ポーリングを固定 delay へ戻さない)とは別問題で、こちらは「適用パスの delay を run loop pump に変えない」。
+12. 書き出し JPEG との同名衝突: 切替先が全画像コレクションになる通常構成では Output の書き出し済み JPEG も同じコレクションに載る。書き出しファイル名を参照 JPEG と同名にする運用にすると、`findVariantInIndex` の先勝ちでどちらが参照になるか並び順次第になる。現状は書き出し命名にサフィックスが付いており衝突していない。
 
 ## Session Folder Contract
 
-必須のフォルダ構成は無い。対象(PureRAW 現像後の DNG、または PureRAW 非使用時の ARW)と、同名の creative-look JPEG が同一セッションに import 済みであれば、All Images コレクション基準で解決する。PureRAW を使わない場合は Selects 直下などにある ARW を直接選択して適用できる。
+必須のフォルダ構成は無い。対象(PureRAW 現像後の DNG、または PureRAW 非使用時の ARW)と、同名の creative-look JPEG が同一セッションに import 済みであれば、切替先コレクション(ゴミ箱を除いて variant 数が最大のコレクション)基準で解決する。PureRAW を使わない場合は Selects 直下などにある ARW を直接選択して適用できる。
 
 固定パスなのは追記ログの出力先のみ:
 
