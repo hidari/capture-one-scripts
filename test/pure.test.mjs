@@ -20,6 +20,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts",
+    "classifyOutcome", "notAppliedEntries",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -327,4 +328,64 @@ test("describeCounts: 診断用の 1 行(名前(件数) をカンマ区切り)",
     ]),
     "Apple(21), File(45)",
   );
+});
+
+test("classifyOutcome: 未適用 0 件は ok", () => {
+  assert.equal(M.classifyOutcome(3, 0), "ok");
+  assert.equal(M.classifyOutcome(1, 0), "ok");
+});
+
+test("classifyOutcome: 全件未適用は none-applied", () => {
+  assert.equal(M.classifyOutcome(3, 3), "none-applied");
+  assert.equal(M.classifyOutcome(1, 1), "none-applied");
+});
+
+test("classifyOutcome: 一部未適用は partial", () => {
+  assert.equal(M.classifyOutcome(3, 1), "partial");
+  assert.equal(M.classifyOutcome(3, 2), "partial");
+  assert.equal(M.classifyOutcome(10, 9), "partial");
+});
+
+test("classifyOutcome: 対象 0 件は ok(早期 return で到達しないが防御的に)", () => {
+  assert.equal(M.classifyOutcome(0, 0), "ok");
+});
+
+// notAppliedEntries は vm 側で生成した配列(要素も vm realm のオブジェクト)を返す。239 行の
+// コメントと同じ realm 差の理由で deepEqual が FAIL する(要素だけでなく配列自体の prototype も
+// 不一致になるため空配列でも FAIL する)。Array.from を main realm(=このテストファイル)側から
+// 呼び出して配列を main realm へ写しつつ、各要素もスプレッドしてプレーンオブジェクト化する
+// (assertMenuCommand と同じ回避策の配列版)。
+function assertNotAppliedEntries(actual, expected) {
+  assert.deepEqual(Array.from(actual, (entry) => ({ ...entry })), expected);
+}
+
+test("notAppliedEntries: applied を除き reason を対応づける", () => {
+  const rows = [
+    { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
+    { target: "b.dng", jpeg: null, matchlook: "-" },
+    { target: "c.dng", jpeg: "c.JPG", matchlook: "no-ref" },
+  ];
+  assertNotAppliedEntries(M.notAppliedEntries(rows), [
+    { target: "b.dng", reason: "nojpeg" },
+    { target: "c.dng", reason: "failed" },
+  ]);
+});
+
+test("notAppliedEntries: 全件 applied なら空配列", () => {
+  const rows = [
+    { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
+    { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" },
+  ];
+  assertNotAppliedEntries(M.notAppliedEntries(rows), []);
+});
+
+test("notAppliedEntries: 出現順を保つ", () => {
+  const rows = [
+    { target: "x.dng", jpeg: "x.JPG", matchlook: "no-ref" },
+    { target: "y.dng", jpeg: null, matchlook: "-" },
+  ];
+  assertNotAppliedEntries(M.notAppliedEntries(rows), [
+    { target: "x.dng", reason: "failed" },
+    { target: "y.dng", reason: "nojpeg" },
+  ]);
 });
