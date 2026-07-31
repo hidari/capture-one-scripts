@@ -697,13 +697,23 @@ function formatNotAppliedNames(entries: NotAppliedEntry[], max: number): string 
   return lines.join("\n");
 }
 
-// 全件未適用のときに throw する文面(pure)。3 行目は「C1 に残る前回の参照とこのスクリプトの
-// 動作は無関係」を明示する再発防止線(この取り違えが実際に起きたため文面で直接答える)。
+// 全件未適用のときに throw する文面(pure)。3 行目は「対象と同名の JPEG が import されているか」
+// の確認を促すが、これは reason が nojpeg(参照 JPEG が索引から引けなかった)の場合にのみ正しい
+// 対処であり、failed(参照は引けたが適用に失敗)には無関係(JPEG は既に import 済みのため確認は
+// 空振りする)。entries に failed が 1 件でも含まれる場合は、正しい対処(時間をおいて再実行)を
+// 促す行を追加する(機序は CLAUDE.md Known Limitations 項目 15 を参照)。5 行目は「C1 に残る
+// 前回の参照とこのスクリプトの動作は無関係」を明示する再発防止線(この取り違えが実際に起きた
+// ため文面で直接答える)。
 function noneAppliedMessage(summary: string, entries: NotAppliedEntry[]): string {
+  const hasFailed = entries.some((e) => e.reason === "failed");
+  const retryLine = hasFailed
+    ? "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n"
+    : "";
   return (
     "選択した " + entries.length + " 件すべてに Match Look を適用できませんでした。\n" +
     formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT) + "\n" +
     "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+    retryLine +
     "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
     summary
   );
