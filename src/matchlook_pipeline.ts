@@ -12,6 +12,16 @@ type ManifestRow = {
   matchlook: "applied" | "no-ref" | "-";
 };
 
+// Match Look を適用できなかった理由。追記ログの matchlook 値("-" / "no-ref")から導く。
+// 表示文言はここに持たず formatNotAppliedNames が持つ(判定値と表示文言を混ぜない)。
+type NotAppliedReason = "nojpeg" | "failed";
+
+// 未適用 1 件の正規化単位。target は対象の原名。
+type NotAppliedEntry = { target: string; reason: NotAppliedReason };
+
+// バッチ全体の帰結。none-applied は throw、partial はダイアログ、ok は無通知。
+type Outcome = "none-applied" | "partial" | "ok";
+
 // 処理対象の正規化単位。baseName=JPEG 照合用(stripSuffixes 済み・小文字)、label=ログ表示用(原名)、
 // variant=選択時点の参照。コレクション切替後もこの参照はそのまま select に使えるため(実機で確認)、
 // 切替後に索引から引き直さない。引き直すと切替先に同名の別 variant(ゴミ箱へ送った旧 DNG や
@@ -647,6 +657,25 @@ function formatSummary(items: number, applied: number, noRef: number, noJpeg: nu
     " nojpeg=" + noJpeg +
     " manifest=" + CONFIG.manifestSubpath
   );
+}
+
+// バッチの帰結を分類する(pure)。itemCount === 0 は run() が早期 return するため到達しないが、
+// notAppliedCount === 0 の条件が先に成立するので "ok" を返す(番兵を別途持たない)。
+function classifyOutcome(itemCount: number, notAppliedCount: number): Outcome {
+  if (notAppliedCount === 0) return "ok";
+  if (notAppliedCount === itemCount) return "none-applied";
+  return "partial";
+}
+
+// 追記ログの行から未適用のものだけを出現順に抜き出す(pure)。matchlook の値がそのまま
+// 理由になるので、集計とは別に数え直さない(rows が唯一の真実)。
+function notAppliedEntries(rows: ManifestRow[]): NotAppliedEntry[] {
+  const out: NotAppliedEntry[] = [];
+  for (const r of rows) {
+    if (r.matchlook === "applied") continue;
+    out.push({ target: r.target, reason: r.matchlook === "no-ref" ? "failed" : "nojpeg" });
+  }
+  return out;
 }
 
 // ================= メイン =================
