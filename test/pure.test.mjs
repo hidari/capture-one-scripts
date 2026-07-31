@@ -422,7 +422,7 @@ test("formatNotAppliedNames: 上限は 5(既定値)", () => {
   assert.equal(M.NOT_APPLIED_NAME_LIMIT, 5);
 });
 
-test("noneAppliedMessage: 件数・対象・注意書き・summary を含む", () => {
+test("noneAppliedMessage: 件数・対象・注意書き・summary を含む(failed 混在で再実行行も出る)", () => {
   const entries = [
     { target: "a.dng", reason: "nojpeg" },
     { target: "b.dng", reason: "failed" },
@@ -434,8 +434,49 @@ test("noneAppliedMessage: 件数・対象・注意書き・summary を含む", (
       "  a.dng (参照 JPEG なし)\n" +
       "  b.dng (適用に失敗)\n" +
       "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+      "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n" +
       "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
       "items=2 applied=0 noref=1 nojpeg=1",
+  );
+});
+
+test("noneAppliedMessage: reason が failed を含まなければ再実行を促す行を足さない", () => {
+  const entries = [
+    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "nojpeg" },
+  ];
+  const msg = M.noneAppliedMessage("items=2 applied=0 noref=0 nojpeg=2", entries);
+  assert.equal(
+    msg,
+    "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+      "  a.dng (参照 JPEG なし)\n" +
+      "  b.dng (参照 JPEG なし)\n" +
+      "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=2 applied=0 noref=0 nojpeg=2",
+  );
+});
+
+// NOT_APPLIED_NAME_LIMIT(5)を超えるエントリで noneAppliedMessage を通し、
+// formatNotAppliedNames への配線(渡す max が NOT_APPLIED_NAME_LIMIT そのものであること)を
+// pin する。値・畳み込みロジック自体は別テストで検証済みなので、ここでは「他 1 件」への
+// 折り畳みが noneAppliedMessage 経由でも起きることだけを見る(reason は failed を含めず
+// 再実行行の有無と混同しない)。
+test("noneAppliedMessage: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」へ畳む(配線 pin)", () => {
+  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  const msg = M.noneAppliedMessage("items=6 applied=0 noref=0 nojpeg=6", entries);
+  assert.equal(
+    msg,
+    "選択した 6 件すべてに Match Look を適用できませんでした。\n" +
+      "  1.dng (参照 JPEG なし)\n" +
+      "  2.dng (参照 JPEG なし)\n" +
+      "  3.dng (参照 JPEG なし)\n" +
+      "  4.dng (参照 JPEG なし)\n" +
+      "  5.dng (参照 JPEG なし)\n" +
+      "  他 1 件\n" +
+      "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=6 applied=0 noref=0 nojpeg=6",
   );
 });
 
@@ -446,5 +487,22 @@ test("notAppliedAlertText: 適用件数と未適用件数を出す", () => {
     "9 件に適用、1 件を適用できませんでした。\n\n" +
       "適用できなかった対象:\n" +
       "  x.dng (参照 JPEG なし)",
+  );
+});
+
+// noneAppliedMessage と同様、NOT_APPLIED_NAME_LIMIT を超えるエントリで notAppliedAlertText を
+// 通し、formatNotAppliedNames への配線を pin する(配線 pin)。
+test("notAppliedAlertText: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」へ畳む(配線 pin)", () => {
+  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  assert.equal(
+    M.notAppliedAlertText(3, entries),
+    "3 件に適用、6 件を適用できませんでした。\n\n" +
+      "適用できなかった対象:\n" +
+      "  1.dng (参照 JPEG なし)\n" +
+      "  2.dng (参照 JPEG なし)\n" +
+      "  3.dng (参照 JPEG なし)\n" +
+      "  4.dng (参照 JPEG なし)\n" +
+      "  5.dng (参照 JPEG なし)\n" +
+      "  他 1 件",
   );
 });
