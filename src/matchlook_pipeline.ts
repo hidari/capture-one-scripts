@@ -718,6 +718,22 @@ function notAppliedAlertText(applied: number, entries: NotAppliedEntry[]): strin
   );
 }
 
+// 部分未適用をダイアログで知らせる。runModal は run loop を回すため、必ず適用ループと HUD の
+// クローズが終わってから呼ぶこと(適用中に run loop を pump すると複数枚適用が壊れる)。
+// 表示に失敗しても握りつぶす(通知は装飾。summary の return を妨げない)。
+function showNotAppliedAlert(text: string): void {
+  try {
+    ObjC.import("AppKit");
+    const alert = $.NSAlert.alloc.init;
+    alert.messageText = "Match Look — 一部を適用できませんでした";
+    alert.informativeText = text;
+    alert.addButtonWithTitle("OK");
+    alert.runModal;
+  } catch (e) {
+    /* 通知できなくても処理結果は summary と追記ログに残る */
+  }
+}
+
 // ================= メイン =================
 function run(): string {
   const C1 = Application(CONFIG.c1AppName);
@@ -749,6 +765,9 @@ function run(): string {
     /* 取れなければ復帰しない */
   }
   const rows: ManifestRow[] = [];
+  // 判定は finally の後で行うため summary を try の外へ持ち出す(NSAlert は run loop を回すので
+  // HUD を閉じコレクションを戻してから呼ぶ。throw も復帰後に投げる)。
+  let summary = "";
 
   // コレクション切替と本処理を try で囲む。createProgressHUD の後に throw しうる文を
   // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
@@ -796,13 +815,12 @@ function run(): string {
     // 破壊的な Match Look 適用はこの時点で完了済み。summary(何件に何を適用したか)を先に
     // 組み立て、ログ保存が失敗しても summary を載せて throw する。fail-loud は保ちつつ、
     // 「ユーザーの写真に何をしたか」だけは必ず伝える(黙って applied=N を返して失敗を隠さない)。
-    const summary = formatSummary(items.length, applied, noRef, noJpeg);
+    summary = formatSummary(items.length, applied, noRef, noJpeg);
     try {
       appendManifest(root, stamp, rows);
     } catch (e) {
       throw new Error(summary + " / manifest 書き込み失敗: " + String(e));
     }
-    return summary;
   } finally {
     // ビューを元のコレクションへ戻す(return / throw いずれでも finally で必ず実行する)。
     if (originalCollection) {
@@ -815,4 +833,17 @@ function run(): string {
     }
     hudClose(hud);
   }
+
+  // ここから先は finally 通過後(コレクション復帰済み・HUD クローズ済み)。適用の Apple Event は
+  // すべて完了しているので、run loop を回す NSAlert を出しても適用シーケンスと交錯しない。
+  // 追記ログは finally より前に書き終えているため、throw する経路でも記録は残る。
+  const notApplied = notAppliedEntries(rows);
+  const outcome = classifyOutcome(rows.length, notApplied.length);
+  if (outcome === "none-applied") {
+    throw new Error(noneAppliedMessage(summary, notApplied));
+  }
+  if (outcome === "partial") {
+    showNotAppliedAlert(notAppliedAlertText(rows.length - notApplied.length, notApplied));
+  }
+  return summary;
 }
