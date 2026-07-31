@@ -21,7 +21,8 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts",
     "classifyOutcome", "notAppliedEntries",
-    "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "noneAppliedMessage", "notAppliedAlertText",
+    "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
+    "noneAppliedMessage", "notAppliedAlertText",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -331,31 +332,26 @@ test("describeCounts: 診断用の 1 行(名前(件数) をカンマ区切り)",
   );
 });
 
-test("classifyOutcome: 未適用 0 件は ok", () => {
+test("classifyOutcome: 未適用件数から ok/none-applied/partial を判定する", () => {
+  // 未適用 0 件は ok
   assert.equal(M.classifyOutcome(3, 0), "ok");
   assert.equal(M.classifyOutcome(1, 0), "ok");
-});
-
-test("classifyOutcome: 全件未適用は none-applied", () => {
+  // 全件未適用は none-applied
   assert.equal(M.classifyOutcome(3, 3), "none-applied");
   assert.equal(M.classifyOutcome(1, 1), "none-applied");
-});
-
-test("classifyOutcome: 一部未適用は partial", () => {
+  // 一部未適用は partial
   assert.equal(M.classifyOutcome(3, 1), "partial");
   assert.equal(M.classifyOutcome(3, 2), "partial");
   assert.equal(M.classifyOutcome(10, 9), "partial");
-});
-
-test("classifyOutcome: 対象 0 件は ok(早期 return で到達しないが防御的に)", () => {
+  // 対象 0 件は ok(早期 return で到達しないが防御的に)
   assert.equal(M.classifyOutcome(0, 0), "ok");
 });
 
-// notAppliedEntries は vm 側で生成した配列(要素も vm realm のオブジェクト)を返す。239 行の
-// コメントと同じ realm 差の理由で deepEqual が FAIL する(要素だけでなく配列自体の prototype も
+// notAppliedEntries は vm 側で生成した配列(要素も vm realm のオブジェクト)を返す。assertMenuCommand
+// と同じ realm 差の理由で deepEqual が FAIL する(要素だけでなく配列自体の prototype も
 // 不一致になるため空配列でも FAIL する)。Array.from を main realm(=このテストファイル)側から
 // 呼び出して配列を main realm へ写しつつ、各要素もスプレッドしてプレーンオブジェクト化する
-// (assertMenuCommand と同じ回避策の配列版)。
+// (同じ回避策の配列版)。
 function assertNotAppliedEntries(actual, expected) {
   assert.deepEqual(Array.from(actual, (entry) => ({ ...entry })), expected);
 }
@@ -422,6 +418,40 @@ test("formatNotAppliedNames: 上限は 5(既定値)", () => {
   assert.equal(M.NOT_APPLIED_NAME_LIMIT, 5);
 });
 
+// notAppliedGuidanceLines: entries に実際に含まれる reason のぶんだけ、対処ガイダンスを
+// 固定順(nojpeg → failed)で組み立てる。存在しない reason のガイダンスは出さない。
+test("notAppliedGuidanceLines: nojpeg のみなら JPEG 確認の行だけを出す", () => {
+  const entries = [{ target: "a.dng", reason: "nojpeg" }];
+  assert.equal(
+    M.notAppliedGuidanceLines(entries),
+    "対象と同名の JPEG がこのセッションに import されているか確認してください。\n",
+  );
+});
+
+test("notAppliedGuidanceLines: failed のみなら再実行の行だけを出す(JPEG 確認の行は出ない)", () => {
+  const entries = [{ target: "a.dng", reason: "failed" }];
+  assert.equal(
+    M.notAppliedGuidanceLines(entries),
+    "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n",
+  );
+});
+
+test("notAppliedGuidanceLines: 両方の reason が混在すると entries の出現順によらず固定順(nojpeg → failed)で出す", () => {
+  const forward = [
+    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "failed" },
+  ];
+  const reversed = [
+    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "nojpeg" },
+  ];
+  const expected =
+    "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+    "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n";
+  assert.equal(M.notAppliedGuidanceLines(forward), expected);
+  assert.equal(M.notAppliedGuidanceLines(reversed), expected);
+});
+
 test("noneAppliedMessage: 件数・対象・注意書き・summary を含む(failed 混在で再実行行も出る)", () => {
   const entries = [
     { target: "a.dng", reason: "nojpeg" },
@@ -454,6 +484,41 @@ test("noneAppliedMessage: reason が failed を含まなければ再実行を促
       "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
       "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
       "items=2 applied=0 noref=0 nojpeg=2",
+  );
+});
+
+test("noneAppliedMessage: reason が nojpeg を含まなければ JPEG 確認の行を出さない(全件 failed)", () => {
+  const entries = [
+    { target: "a.dng", reason: "failed" },
+    { target: "b.dng", reason: "failed" },
+  ];
+  const msg = M.noneAppliedMessage("items=2 applied=0 noref=2 nojpeg=0", entries);
+  assert.equal(
+    msg,
+    "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+      "  a.dng (適用に失敗)\n" +
+      "  b.dng (適用に失敗)\n" +
+      "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=2 applied=0 noref=2 nojpeg=0",
+  );
+});
+
+test("noneAppliedMessage: 混在時のガイダンス順は entries の出現順によらず固定(nojpeg → failed)", () => {
+  const entries = [
+    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "nojpeg" },
+  ];
+  const msg = M.noneAppliedMessage("items=2 applied=0 noref=1 nojpeg=1", entries);
+  assert.equal(
+    msg,
+    "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+      "  b.dng (適用に失敗)\n" +
+      "  a.dng (参照 JPEG なし)\n" +
+      "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+      "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=2 applied=0 noref=1 nojpeg=1",
   );
 });
 

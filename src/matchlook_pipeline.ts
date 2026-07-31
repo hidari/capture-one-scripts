@@ -697,23 +697,43 @@ function formatNotAppliedNames(entries: NotAppliedEntry[], max: number): string 
   return lines.join("\n");
 }
 
-// 全件未適用のときに throw する文面(pure)。3 行目は「対象と同名の JPEG が import されているか」
-// の確認を促すが、これは reason が nojpeg(参照 JPEG が索引から引けなかった)の場合にのみ正しい
-// 対処であり、failed(参照は引けたが適用に失敗)には無関係(JPEG は既に import 済みのため確認は
-// 空振りする)。entries に failed が 1 件でも含まれる場合は、正しい対処(時間をおいて再実行)を
-// 促す行を追加する(機序は CLAUDE.md Known Limitations 項目 15 を参照)。5 行目は「C1 に残る
-// 前回の参照とこのスクリプトの動作は無関係」を明示する再発防止線(この取り違えが実際に起きた
-// ため文面で直接答える)。
+// 未適用の理由に対応する対処ガイダンス(pure)。notAppliedReasonLabel と同じパターンで、判定値と
+// 表示文言の対応をここ 1 箇所に閉じる。nojpeg の対処(JPEG が import 済みか確認)は failed(参照は
+// 引けたが適用に失敗)には無関係(JPEG は既に import 済みのため確認は空振りする)なので、
+// notAppliedGuidanceLines 側で entries に実際に含まれる reason のぶんだけに絞る。
+// (機序は CLAUDE.md Known Limitations 項目 15 を参照。文言自体には含めない)
+const NOT_APPLIED_GUIDANCE: Record<NotAppliedReason, string> = {
+  nojpeg: "対象と同名の JPEG がこのセッションに import されているか確認してください。",
+  failed:
+    "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。",
+};
+
+// ガイダンスを出す固定順(nojpeg → failed)。entries の出現順に依存すると選択順で文面が入れ替わり
+// テストが脆くなるため、順序は entries の並びと独立に固定する。
+const NOT_APPLIED_GUIDANCE_ORDER: NotAppliedReason[] = ["nojpeg", "failed"];
+
+// entries に実際に含まれる reason のぶんだけ、対処ガイダンスを固定順で組み立てる(pure)。
+// 存在しない reason のガイダンスは出さない。noneAppliedMessage 専用にせず独立関数にしてあるのは、
+// 将来 notAppliedAlertText 側でも使うことになった場合に同じロジックをコピーして二重管理に
+// しないため。
+function notAppliedGuidanceLines(entries: NotAppliedEntry[]): string {
+  const present = new Set(entries.map((e) => e.reason));
+  return NOT_APPLIED_GUIDANCE_ORDER.filter((reason) => present.has(reason))
+    .map((reason) => NOT_APPLIED_GUIDANCE[reason] + "\n")
+    .join("");
+}
+
+// 全件未適用のときに throw する文面(pure)。対処ガイダンスは notAppliedGuidanceLines が
+// entries に実際に含まれる reason のぶんだけ固定順(nojpeg → failed)で組み立てるため、
+// 存在しない理由への対処(例: failed しか無いのに JPEG import 確認を促す)が出ることは構造的に
+// 起きない。「Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは
+// 何も適用していません。」は「C1 に残る前回の参照とこのスクリプトの動作は無関係」を明示する
+// 再発防止線(この取り違えが実際に起きたため文面で直接答える)。
 function noneAppliedMessage(summary: string, entries: NotAppliedEntry[]): string {
-  const hasFailed = entries.some((e) => e.reason === "failed");
-  const retryLine = hasFailed
-    ? "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n"
-    : "";
   return (
     "選択した " + entries.length + " 件すべてに Match Look を適用できませんでした。\n" +
     formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT) + "\n" +
-    "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
-    retryLine +
+    notAppliedGuidanceLines(entries) +
     "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
     summary
   );
