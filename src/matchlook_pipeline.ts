@@ -678,6 +678,46 @@ function notAppliedEntries(rows: ManifestRow[]): NotAppliedEntry[] {
   return out;
 }
 
+// 未適用の対象名を並べる上限。表示上の都合であり、受理拡張子やラベルのような機械検証可能な
+// 制約ではないため CONFIG には置かない。throw の文面とアラート本文の双方で同じ値を使う。
+const NOT_APPLIED_NAME_LIMIT = 5;
+
+// 未適用の理由に対応するユーザー可視の文言(pure)。判定値(NotAppliedReason)と表示文言の
+// 対応はここ 1 箇所に閉じる。
+function notAppliedReasonLabel(reason: NotAppliedReason): string {
+  return reason === "failed" ? "適用に失敗" : "参照 JPEG なし";
+}
+
+// 未適用の対象を「  名前 (理由)」の行で並べる(pure)。max を超えた分は「  他 N 件」へ畳む。
+function formatNotAppliedNames(entries: NotAppliedEntry[], max: number): string {
+  const shown = entries.slice(0, max);
+  const lines = shown.map((e) => "  " + e.target + " (" + notAppliedReasonLabel(e.reason) + ")");
+  const rest = entries.length - shown.length;
+  if (rest > 0) lines.push("  他 " + rest + " 件");
+  return lines.join("\n");
+}
+
+// 全件未適用のときに throw する文面(pure)。3 行目は「C1 に残る前回の参照とこのスクリプトの
+// 動作は無関係」を明示する再発防止線(この取り違えが実際に起きたため文面で直接答える)。
+function noneAppliedMessage(summary: string, entries: NotAppliedEntry[]): string {
+  return (
+    "選択した " + entries.length + " 件すべてに Match Look を適用できませんでした。\n" +
+    formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT) + "\n" +
+    "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+    "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+    summary
+  );
+}
+
+// 部分未適用のときにダイアログへ出す本文(pure)。
+function notAppliedAlertText(applied: number, entries: NotAppliedEntry[]): string {
+  return (
+    applied + " 件に適用、" + entries.length + " 件を適用できませんでした。\n\n" +
+    "適用できなかった対象:\n" +
+    formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT)
+  );
+}
+
 // ================= メイン =================
 function run(): string {
   const C1 = Application(CONFIG.c1AppName);
