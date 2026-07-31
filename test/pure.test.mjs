@@ -21,6 +21,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts",
     "classifyOutcome", "notAppliedEntries",
+    "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "noneAppliedMessage", "notAppliedAlertText",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -388,4 +389,62 @@ test("notAppliedEntries: 出現順を保つ", () => {
     { target: "x.dng", reason: "failed" },
     { target: "y.dng", reason: "nojpeg" },
   ]);
+});
+
+test("formatNotAppliedNames: 理由の文言を対応づける", () => {
+  const entries = [
+    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "failed" },
+  ];
+  assert.equal(
+    M.formatNotAppliedNames(entries, 5),
+    "  a.dng (参照 JPEG なし)\n  b.dng (適用に失敗)",
+  );
+});
+
+test("formatNotAppliedNames: 上限ちょうどなら畳まない", () => {
+  const entries = [1, 2, 3].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  assert.equal(
+    M.formatNotAppliedNames(entries, 3),
+    "  1.dng (参照 JPEG なし)\n  2.dng (参照 JPEG なし)\n  3.dng (参照 JPEG なし)",
+  );
+});
+
+test("formatNotAppliedNames: 上限超過は「他 N 件」へ畳む", () => {
+  const entries = [1, 2, 3, 4, 5].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  assert.equal(
+    M.formatNotAppliedNames(entries, 2),
+    "  1.dng (参照 JPEG なし)\n  2.dng (参照 JPEG なし)\n  他 3 件",
+  );
+});
+
+test("formatNotAppliedNames: 上限は 5(既定値)", () => {
+  assert.equal(M.NOT_APPLIED_NAME_LIMIT, 5);
+});
+
+test("noneAppliedMessage: 件数・対象・注意書き・summary を含む", () => {
+  const entries = [
+    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "failed" },
+  ];
+  const msg = M.noneAppliedMessage("items=2 applied=0 noref=1 nojpeg=1", entries);
+  assert.equal(
+    msg,
+    "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+      "  a.dng (参照 JPEG なし)\n" +
+      "  b.dng (適用に失敗)\n" +
+      "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=2 applied=0 noref=1 nojpeg=1",
+  );
+});
+
+test("notAppliedAlertText: 適用件数と未適用件数を出す", () => {
+  const entries = [{ target: "x.dng", reason: "nojpeg" }];
+  assert.equal(
+    M.notAppliedAlertText(9, entries),
+    "9 件に適用、1 件を適用できませんでした。\n\n" +
+      "適用できなかった対象:\n" +
+      "  x.dng (参照 JPEG なし)",
+  );
 });
