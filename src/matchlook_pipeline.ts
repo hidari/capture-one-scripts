@@ -482,6 +482,28 @@ function findVariantInIndex(
   return null;
 }
 
+// 一括読み(複数形アクセス)の戻り値を文字列配列へ正規化する(pure)。配列でない、または
+// 件数が expected と違う場合は null を返し、呼び出し側を逐次読みへ落とす。件数の違う結果を
+// そのまま使うと添字とコレクションの対応が壊れ、別のコレクションの id / name を貼り付ける。
+// 個別要素が読めない(null / undefined)場合はその要素だけ空文字にする(候補からは外さない)。
+function normalizeBulkStrings(raw: unknown, expected: number): string[] | null {
+  // 文字列も length を持つので、object かどうかをここで弾かないと "AB" が長さ 2 の配列として
+  // 通ってしまう(長さ検査では弾けない)。
+  if (raw === null || typeof raw !== "object") return null;
+  const len = (raw as { length?: unknown }).length;
+  // typeof len !== "number" は防御的な冗長条件。expected が number である限り後続の
+  // len !== expected が同じ入力を全て弾くので単独では到達しないが、型を外れた呼び出しに
+  // 備えて残す(String(undefined) のような値を長さとして扱わないため)。
+  if (typeof len !== "number" || len !== expected) return null;
+  const arr = raw as unknown[];
+  const out: string[] = [];
+  for (let i = 0; i < len; i++) {
+    const v = arr[i];
+    out.push(v === null || v === undefined ? "" : String(v));
+  }
+  return out;
+}
+
 // 対象と JPEG を同一コレクションに揃える。variants() は current collection スコープなので、
 // 対象のコレクションだけをブラウズ中だと JPEG が載らず Match Look の参照を引けない。
 //
