@@ -675,35 +675,47 @@ test("errorMessage: Error の message を取り出す / message を持たない�
   assert.equal(M.errorMessage(new Error("")), "Error");
 });
 
-test("notAppliedEntries: applied を除き reason を対応づける", () => {
-  const rows = [
-    { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
-    { target: "b.dng", jpeg: null, matchlook: "-" },
-    { target: "c.dng", jpeg: "c.JPG", matchlook: "no-ref" },
+test("notAppliedEntries: applied を除き reason を対応づけ detail をそのまま持ち回る", () => {
+  const outcomes = [
+    { row: { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" }, detail: null },
+    { row: { target: "b.dng", jpeg: null, matchlook: "-" }, detail: null },
+    {
+      row: { target: "c.dng", jpeg: "c.JPG", matchlook: "no-ref" },
+      detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用",
+    },
   ];
-  assertPlainEqual(M.notAppliedEntries(rows), [
-    { target: "b.dng", reason: "nojpeg" },
-    { target: "c.dng", reason: "failed" },
+  // 肝: detail を捨てて null 固定にすると 3 件目の期待値と食い違い FAIL する(変異検出)。
+  assertPlainEqual(M.notAppliedEntries(outcomes), [
+    { target: "b.dng", reason: "nojpeg", detail: null },
+    { target: "c.dng", reason: "failed", detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用" },
   ]);
 });
 
 test("notAppliedEntries: 全件 applied なら空配列", () => {
-  const rows = [
-    { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
-    { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" },
+  const outcomes = [
+    { row: { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" }, detail: null },
+    { row: { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" }, detail: null },
   ];
-  assertPlainEqual(M.notAppliedEntries(rows), []);
+  assertPlainEqual(M.notAppliedEntries(outcomes), []);
 });
 
 test("notAppliedEntries: 出現順を保つ", () => {
-  const rows = [
-    { target: "x.dng", jpeg: "x.JPG", matchlook: "no-ref" },
-    { target: "y.dng", jpeg: null, matchlook: "-" },
+  const outcomes = [
+    { row: { target: "x.dng", jpeg: "x.JPG", matchlook: "no-ref" }, detail: "x の失敗理由" },
+    { row: { target: "y.dng", jpeg: null, matchlook: "-" }, detail: null },
   ];
-  assertPlainEqual(M.notAppliedEntries(rows), [
-    { target: "x.dng", reason: "failed" },
-    { target: "y.dng", reason: "nojpeg" },
+  assertPlainEqual(M.notAppliedEntries(outcomes), [
+    { target: "x.dng", reason: "failed", detail: "x の失敗理由" },
+    { target: "y.dng", reason: "nojpeg", detail: null },
   ]);
+});
+
+test("notAppliedEntries: ManifestRow[] を直接渡すと黙って壊れず例外になる(形の取り違えの pin)", () => {
+  // 肝: o.row を optional chaining や既定値で握りつぶすと reason: undefined の entry が静かに
+  // 積まれ、通知の文面だけが壊れる(型エラーにもならない)。row の欠落は例外として出す。
+  // 除外条件は `reason === null` のまま維持すること(!reason へ緩めると undefined も
+  // 除外されてしまい、この取り違えが「未適用 0 件」に化ける)。
+  assert.throws(() => M.notAppliedEntries([{ target: "a.dng", jpeg: null, matchlook: "-" }]));
 });
 
 test("formatNotAppliedNames: 理由の文言を対応づける", () => {
@@ -1648,16 +1660,16 @@ function messageOfThrow(fn) {
 // 未適用の理由は nojpeg だけに揃える。failed を混ぜると理由セクションを足す将来の変更で
 // 期待文字列が動くため、この 6 件では「順序と合成」だけを見る。
 const FINISH_OK_ROWS = [
-  { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
-  { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" },
+  { row: { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" }, detail: null },
+  { row: { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" }, detail: null },
 ];
 const FINISH_PARTIAL_ROWS = [
-  { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
-  { target: "b.dng", jpeg: null, matchlook: "-" },
+  { row: { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" }, detail: null },
+  { row: { target: "b.dng", jpeg: null, matchlook: "-" }, detail: null },
 ];
 const FINISH_NONE_ROWS = [
-  { target: "a.dng", jpeg: null, matchlook: "-" },
-  { target: "b.dng", jpeg: null, matchlook: "-" },
+  { row: { target: "a.dng", jpeg: null, matchlook: "-" }, detail: null },
+  { row: { target: "b.dng", jpeg: null, matchlook: "-" }, detail: null },
 ];
 const FINISH_PARTIAL_ALERT =
   "notify:1 件に適用、1 件を適用できませんでした。\n\n" +
