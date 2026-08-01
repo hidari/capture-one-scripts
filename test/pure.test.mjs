@@ -1249,3 +1249,145 @@ test("ensureWorkingCollection: 切替後の id が期待と違えば候補一覧
   // 着地検証は select 安全弁より前で止める(誤ったコレクションで対象に触らない)。
   assert.deepEqual(calls.selected, []);
 });
+
+// ================= run() の構造テスト =================
+// run() は純粋関数ではないが、「索引構築の失敗をバッチごと中断する」という構造は
+// Capture One の fake で駆動しないと pin できない。fake は実 C1 の代替ではなく、
+// run() が索引をいつ何回作りどこで throw するかだけを観測するための seam に絞る。
+//
+// JXA の specifier は「関数として呼べる」かつ「プロパティも持つ」(doc.variants() と
+// doc.variants.name() の両方が成立する)。その形の fake は Task 9 が導入した
+// callableSpecifier(callImpl, props) を使う。ここで同名の関数を再定義しないこと
+// (ESM のトップレベル関数宣言が重複すると SyntaxError になり、テストファイル全体が
+// パースできず全件 0 件実行で落ちる)。
+
+// 索引読み取りの失敗として注入する生のメッセージ。run() の診断へ verbatim で載ることを pin する。
+const INDEX_FAILURE = "Apple Event failed (-1728)";
+
+// run() を通すための最小 fake。対象は DNG 2 件だけで同名 JPEG を置かない(ループへ入っても
+// Match Look の実行までは行かせない)。options.indexFailure を渡すと doc.variants() が throw し、
+// 索引構築の失敗を再現する(doc.variants() を呼ぶのは buildVariantIndex だけ。選択の取得と
+// 安全弁は doc.variants.whose 経由なので、この注入は索引構築だけを狙い撃ちできる)。
+// コレクションは 1 つで currentCollection と id が一致するため ensureWorkingCollection は
+// 早期 return する(切替と着地検証は本タスクの観測対象ではない)。
+function fakeRunEnv(options = {}) {
+  const calls = { indexReads: 0, activate: 0, collectionRestores: 0 };
+  const written = {};
+  const all = [fakeVariant("IMG1234", "IMG1234.DNG"), fakeVariant("IMG5678", "IMG5678.DNG")];
+  const names = () => all.map((v) => v.name());
+  const imageNames = () => all.map((v) => v.parentImage().name());
+
+  const docVariants = callableSpecifier(
+    () => {
+      calls.indexReads++;
+      if (options.indexFailure) throw new Error(options.indexFailure);
+      return all;
+    },
+    { name: names, parentImage: { name: imageNames }, whose: () => () => all },
+  );
+
+  const colVariants = callableSpecifier(() => all, {
+    name: names,
+    parentImage: { name: imageNames },
+  });
+  const collection = { id: () => "8", name: () => "All Images", variants: colVariants };
+  const doc = {
+    output: () => "/S/Output",
+    variants: docVariants,
+    collections: callableSpecifier(() => [collection], {
+      id: () => ["8"],
+      name: () => ["All Images"],
+    }),
+    select: () => {},
+    deselect: () => {},
+  };
+  // currentCollection は「読めて」かつ「代入できる」。代入回数を数えることで run() の finally
+  // (元コレクションへの復帰)が走ったか = throw が try の内側から出たかを観測する。
+  Object.defineProperty(doc, "currentCollection", {
+    get: () => () => collection,
+    set: () => {
+      calls.collectionRestores++;
+    },
+    configurable: true,
+  });
+
+  const C1 = {
+    currentDocument: doc,
+    activate: () => {
+      calls.activate++;
+    },
+  };
+  const menuBarItems = [
+    { menus: [{ menuItems: { name: () => ["Set Match Look Reference", "Apply Match Look"] } }] },
+  ];
+  menuBarItems.name = () => ["Adjustments"];
+  const SE = { processes: { byName: () => ({ menuBars: [{ menuBarItems: menuBarItems }] }) } };
+
+  // appendManifest 用の最小 Foundation fake。書き込み先パスを記録するだけで、
+  // 「索引失敗時は追記ログすら書かれない(ループへ入っていない)」の観測に使う。
+  const $ = (x) => ({
+    __value: x,
+    writeToFileAtomicallyEncodingError: (path) => {
+      written[String(path.__value)] = String(x);
+      return true;
+    },
+  });
+  $.NSUTF8StringEncoding = 4;
+  $.NSFileManager = {
+    defaultManager: {
+      createDirectoryAtPathWithIntermediateDirectoriesAttributesError: () => true,
+      fileExistsAtPath: () => false,
+    },
+  };
+  const ObjC = { import: () => {}, unwrap: (x) => x };
+
+  const Application = (appName) => (appName === "System Events" ? SE : C1);
+  return { sandbox: { Application, $, ObjC }, calls: calls, written: written };
+}
+
+// vm realm の Error は main realm の Error を継承しないため assert.throws に
+// コンストラクタを渡せない。捕捉して message で検証する。
+function runAndCatch(env) {
+  const M = loadModule(env.sandbox, ["run"]);
+  try {
+    M.run();
+  } catch (e) {
+    return e;
+  }
+  return null;
+}
+
+test("run: 索引構築の失敗はバッチごと中断する(全件 no-ref に degrade させない)", () => {
+  const env = fakeRunEnv({ indexFailure: INDEX_FAILURE });
+  const err = runAndCatch(env);
+  assert.ok(err, "run() が throw していない");
+  const message = String(err.message);
+  assert.match(message, /variant 索引を構築できません/);
+  // 生の失敗内容を落とすと真の原因が消える(この修正の主目的)。
+  assert.ok(message.indexOf(INDEX_FAILURE) >= 0, "生の失敗内容が verbatim で載っていない");
+  assert.match(message, /対象 2 件/);
+  assert.match(message, /Match Look は適用していません/);
+  // 索引はバッチで 1 回。ループ内に戻すと対象の件数ぶん試行されここが 2 になる(変異検出)。
+  assert.equal(env.calls.indexReads, 1);
+  // 適用ループへ入っていないこと(applyMatchLook_viaMenu は C1.activate から始まる)。
+  assert.equal(env.calls.activate, 0);
+  // throw が try の内側から出たこと。try の外へ出すと finally を通らずここが 0 になる(変異検出)。
+  assert.equal(env.calls.collectionRestores, 1);
+  assert.deepEqual(Object.keys(env.written), []);
+});
+
+test("run: 索引が作れれば従来どおり適用ループへ進む(常に throw する実装ではない)", () => {
+  const env = fakeRunEnv();
+  const err = runAndCatch(env);
+  assert.ok(err, "同名 JPEG が無いので none-applied で throw する");
+  const message = String(err.message);
+  assert.ok(message.indexOf("variant 索引") < 0, "索引診断が出てはいけない");
+  assert.match(message, /選択した 2 件すべてに Match Look を適用できませんでした/);
+  // noneAppliedMessage の末尾に載る summary を exact な部分文字列で pin する。Task 8 が入れた
+  // formatSummary(items.length, tally.applied, tally["no-ref"], tally["-"]) の第 3・第 4 引数を
+  // 取り違えると noref と nojpeg が入れ替わってここが赤になる(fake の 2 件は同名 JPEG が
+  // 無いので nojpeg=2 / noref=0 が正)。この 1 行が Task 8 の配線 pin を兼ねる。
+  assert.ok(message.indexOf("items=2 applied=0 noref=0 nojpeg=2") >= 0, "summary の内訳が違う");
+  assert.equal(env.calls.indexReads, 1);
+  assert.deepEqual(Object.keys(env.written), ["/S/Output/matchlook_pairs.tsv"]);
+});
