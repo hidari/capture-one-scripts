@@ -28,6 +28,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
     "noneAppliedMessage", "notAppliedAlertText",
     "withManifestFailure", "finishRun",
+    "errorMessage",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -659,6 +660,19 @@ test("tallyMatchlook: 空 rows は全キー 0(キーの初期化を pin)", () =>
   assert.equal(tally["no-ref"], 0);
   assert.equal(tally["-"], 0);
   assert.deepEqual(Object.keys(tally).sort(), ["-", "applied", "no-ref"]);
+});
+
+test("errorMessage: Error の message を取り出す / message を持たない値は String() へ落とす", () => {
+  // 肝: message ではなく String(e) を返す実装へ戻すと "Error: " の接頭辞が付いてここが FAIL する(変異検出)。
+  assert.equal(
+    M.errorMessage(new Error("メニュー項目が有効化されない: 調整 > マッチルックを適用")),
+    "メニュー項目が有効化されない: 調整 > マッチルックを適用",
+  );
+  // message を持たない throw(文字列 / null)は String() へ落とす。
+  assert.equal(M.errorMessage("plain string"), "plain string");
+  assert.equal(M.errorMessage(null), "null");
+  // message が空の Error も String() 側へ落ちる(空文字の detail を作らない)。
+  assert.equal(M.errorMessage(new Error("")), "Error");
 });
 
 test("notAppliedEntries: applied を除き reason を対応づける", () => {

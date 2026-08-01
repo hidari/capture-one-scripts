@@ -147,6 +147,14 @@ function describeCounts(entries: { label: string; count: number }[]): string {
   return entries.map((e) => e.label + "(" + e.count + ")").join(", ");
 }
 
+// 例外から表示用の message を取り出す(pure)。JXA の Error は失敗理由を message に持つため
+// String(e) の "Error: " 接頭辞を避けてそのまま使う。message を持たない値(文字列 throw 等)や
+// 空 message は String() へ落とす(空文字の detail を作らない)。
+function errorMessage(e: unknown): string {
+  const m = e === null || typeof e !== "object" ? null : (e as { message?: unknown }).message;
+  return m === null || m === undefined || m === "" ? String(e) : String(m);
+}
+
 function stripSuffixes(name: string): string {
   for (const suf of CONFIG.stripSuffixes) {
     if (name.endsWith(suf)) return name.slice(0, -suf.length);
