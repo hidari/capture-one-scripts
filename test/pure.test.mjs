@@ -26,6 +26,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
     "noneAppliedMessage", "notAppliedAlertText",
+    "withManifestFailure", "finishRun",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -1264,16 +1265,21 @@ test("ensureWorkingCollection: 切替後の id が期待と違えば候補一覧
 // 索引読み取りの失敗として注入する生のメッセージ。run() の診断へ verbatim で載ることを pin する。
 const INDEX_FAILURE = "Apple Event failed (-1728)";
 
-// run() を通すための最小 fake。対象は DNG 2 件だけで同名 JPEG を置かない(ループへ入っても
-// Match Look の実行までは行かせない)。options.indexFailure を渡すと doc.variants() が throw し、
+// run() を通すための最小 fake。既定では対象は DNG 2 件だけで同名 JPEG を置かない(ループへ
+// 入っても Match Look の実行までは行かせない)。options.withJpeg を渡すと IMG1234 の JPEG を
+// 足して 1 件だけ applied にでき、部分未適用(partial)を作れる。options.manifestFailure を
+// 渡すと追記ログの書き込みが必ず失敗する。options.indexFailure を渡すと doc.variants() が throw し、
 // 索引構築の失敗を再現する(doc.variants() を呼ぶのは buildVariantIndex だけ。選択の取得と
 // 安全弁は doc.variants.whose 経由なので、この注入は索引構築だけを狙い撃ちできる)。
 // コレクションは 1 つで currentCollection と id が一致するため ensureWorkingCollection は
 // 早期 return する(切替と着地検証は本タスクの観測対象ではない)。
 function fakeRunEnv(options = {}) {
-  const calls = { indexReads: 0, activate: 0, collectionRestores: 0 };
+  const calls = { indexReads: 0, activate: 0, collectionRestores: 0, menuClicks: 0, alerts: [] };
   const written = {};
   const all = [fakeVariant("IMG1234", "IMG1234.DNG"), fakeVariant("IMG5678", "IMG5678.DNG")];
+  // IMG1234 だけに同名 JPEG を与える。selectedTargetItems は parentImage の拡張子で弾くので
+  // 対象は DNG 2 件のままで、索引からは IMG1234 の JPEG だけが引ける(= 1 件だけ applied)。
+  if (options.withJpeg) all.push(fakeVariant("IMG1234", "IMG1234.JPG"));
   const names = () => all.map((v) => v.name());
   const imageNames = () => all.map((v) => v.parentImage().name());
 
@@ -1321,6 +1327,11 @@ function fakeRunEnv(options = {}) {
     { menus: [{ menuItems: { name: () => ["Set Match Look Reference", "Apply Match Look"] } }] },
   ];
   menuBarItems.name = () => ["Adjustments"];
+  // clickMenuItem は byName の連鎖で項目を引き、enabled() が true になるまでポーリングしてから
+  // click する。この口が無いと applyMatchLook_viaMenu が TypeError で落ち、run() の per-item catch
+  // が no-ref にしてしまうため partial を作れない。
+  const menuItem = { enabled: () => true, click: () => { calls.menuClicks++; } };
+  menuBarItems.byName = () => ({ menus: [{ menuItems: { byName: () => menuItem } }] });
   const SE = { processes: { byName: () => ({ menuBars: [{ menuBarItems: menuBarItems }] }) } };
 
   // appendManifest 用の最小 Foundation fake。書き込み先パスを記録するだけで、
@@ -1328,6 +1339,9 @@ function fakeRunEnv(options = {}) {
   const $ = (x) => ({
     __value: x,
     writeToFileAtomicallyEncodingError: (path) => {
+      // writeTextFile は false を「ファイルを書き込めません: <path>」の throw へ変換するので、
+      // read-only な Output を実機で作らずに appendManifest の例外経路を再現できる。
+      if (options.manifestFailure) return false;
       written[String(path.__value)] = String(x);
       return true;
     },
@@ -1337,6 +1351,24 @@ function fakeRunEnv(options = {}) {
     defaultManager: {
       createDirectoryAtPathWithIntermediateDirectoriesAttributesError: () => true,
       fileExistsAtPath: () => false,
+    },
+  };
+  // showNotAppliedAlert は例外を握りつぶすので、$ に NSAlert が無いと「ダイアログを出そうとした」
+  // ことすら観測できない。runModal は JXA ではプロパティ参照なので getter で記録する。
+  $.NSAlert = {
+    alloc: {
+      get init() {
+        const alert = {
+          messageText: "",
+          informativeText: "",
+          addButtonWithTitle: () => {},
+          get runModal() {
+            calls.alerts.push(alert.informativeText);
+            return 1;
+          },
+        };
+        return alert;
+      },
     },
   };
   const ObjC = { import: () => {}, unwrap: (x) => x };
@@ -1390,4 +1422,211 @@ test("run: 索引が作れれば従来どおり適用ループへ進む(常に t
   assert.ok(message.indexOf("items=2 applied=0 noref=0 nojpeg=2") >= 0, "summary の内訳が違う");
   assert.equal(env.calls.indexReads, 1);
   assert.deepEqual(Object.keys(env.written), ["/S/Output/matchlook_pairs.tsv"]);
+});
+
+// ---- manifest 書き込み失敗時も未適用の帰結を先に通知する(run() 末尾の帰結処理) ----
+
+test("withManifestFailure: detail が null なら base をそのまま返す", () => {
+  assert.equal(
+    M.withManifestFailure("items=1 applied=1 noref=0 nojpeg=0", null),
+    "items=1 applied=1 noref=0 nojpeg=0",
+  );
+});
+
+test("withManifestFailure: detail があれば base の末尾へ 1 行足す", () => {
+  assert.equal(
+    M.withManifestFailure("SUMMARY", "Error: ファイルを書き込めません: /S/Output/matchlook_pairs.tsv"),
+    "SUMMARY\nmanifest 書き込み失敗: Error: ファイルを書き込めません: /S/Output/matchlook_pairs.tsv",
+  );
+});
+
+test("withManifestFailure: 空文字の detail も失敗として扱う(=== null を pin)", () => {
+  // これは実経路では到達しない防御的 pin で、`detail === null` を `!detail` へ緩める変異を
+  // 検出するためだけに置く。detail の唯一の生成元は appendManifestOrError の String(e) で、
+  // appendManifest が投げるのは常に new Error("ファイルを書き込めません: ...") なので、
+  // 空文字になる入力は本番には無い(manifestContent の `existing === ""` は fileExists true +
+  // 0 byte という実在経路があるので状況が違う)。
+  assert.equal(M.withManifestFailure("SUMMARY", ""), "SUMMARY\nmanifest 書き込み失敗: ");
+});
+
+// finishRun は notify を注入して呼ぶ。既定の実装(showNotAppliedAlert)は NSAlert で run loop を
+// 回すためテストから観測できないので、呼び出しを記録するスタブへ差し替える。events の中身で
+// 「通知してから manifest 例外を投げる」順序まで pin する。
+function makeNotify(events) {
+  return (text) => events.push("notify:" + text);
+}
+
+// throw された Error の message を取り出す。throw しなかった場合は null を返すので、
+// 文面を期待する assert はそのまま FAIL する(「throw しなくなる」変異も検出できる)。
+function messageOfThrow(fn) {
+  try {
+    fn();
+  } catch (e) {
+    return String(e.message);
+  }
+  return null;
+}
+
+// 未適用の理由は nojpeg だけに揃える。failed を混ぜると理由セクションを足す将来の変更で
+// 期待文字列が動くため、この 6 件では「順序と合成」だけを見る。
+const FINISH_OK_ROWS = [
+  { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
+  { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" },
+];
+const FINISH_PARTIAL_ROWS = [
+  { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
+  { target: "b.dng", jpeg: null, matchlook: "-" },
+];
+const FINISH_NONE_ROWS = [
+  { target: "a.dng", jpeg: null, matchlook: "-" },
+  { target: "b.dng", jpeg: null, matchlook: "-" },
+];
+const FINISH_PARTIAL_ALERT =
+  "notify:1 件に適用、1 件を適用できませんでした。\n\n" +
+  "適用できなかった対象:\n" +
+  "  b.dng (参照 JPEG なし)";
+const FINISH_NONE_MESSAGE =
+  "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+  "  a.dng (参照 JPEG なし)\n" +
+  "  b.dng (参照 JPEG なし)\n" +
+  "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
+  "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+  "items=2 applied=0 noref=0 nojpeg=2";
+
+test("finishRun: 全件適用・manifest 成功なら summary を返し通知しない", () => {
+  const events = [];
+  assert.equal(M.finishRun("SUMMARY", FINISH_OK_ROWS, null, makeNotify(events)), "SUMMARY");
+  assert.deepEqual(events, []);
+});
+
+test("finishRun: 部分未適用・manifest 成功ならダイアログ本文を通知して summary を返す", () => {
+  const events = [];
+  assert.equal(M.finishRun("SUMMARY", FINISH_PARTIAL_ROWS, null, makeNotify(events)), "SUMMARY");
+  assert.deepEqual(events, [FINISH_PARTIAL_ALERT]);
+});
+
+test("finishRun: 全件未適用・manifest 成功なら未適用の文面で throw する(manifest 行は付かない)", () => {
+  const events = [];
+  const msg = messageOfThrow(() =>
+    M.finishRun("items=2 applied=0 noref=0 nojpeg=2", FINISH_NONE_ROWS, null, makeNotify(events)),
+  );
+  assert.equal(msg, FINISH_NONE_MESSAGE);
+  // 全件未適用ではダイアログを出さない(throw の文面が通知を兼ねる)。
+  assert.deepEqual(events, []);
+});
+
+test("finishRun: 全件適用でも manifest 失敗なら summary 付きで throw する", () => {
+  const events = [];
+  const msg = messageOfThrow(() =>
+    M.finishRun("SUMMARY", FINISH_OK_ROWS, "Error: ファイルを書き込めません: /S/Output/x.tsv", makeNotify(events)),
+  );
+  // 肝: manifest 失敗を握りつぶして summary を return する実装に変えると msg が null になり
+  // FAIL する(変異検出)。Known Limitations 10 の fail-loud を pin する。
+  assert.equal(msg, "SUMMARY\nmanifest 書き込み失敗: Error: ファイルを書き込めません: /S/Output/x.tsv");
+  assert.deepEqual(events, []);
+});
+
+test("finishRun: 部分未適用 + manifest 失敗はダイアログを出してから throw する(順序 pin)", () => {
+  const events = [];
+  const msg = messageOfThrow(() =>
+    M.finishRun("SUMMARY", FINISH_PARTIAL_ROWS, "Error: boom", makeNotify(events)),
+  );
+  // 肝: manifest 例外を帰結判定より先に投げる実装(現行 run() の形)へ戻すと notify が
+  // 呼ばれず events が空になり FAIL する(変異検出)。これが本タスクの中心の pin。
+  assert.deepEqual(events, [FINISH_PARTIAL_ALERT]);
+  assert.equal(msg, "SUMMARY\nmanifest 書き込み失敗: Error: boom");
+});
+
+test("finishRun: 全件未適用 + manifest 失敗は未適用の文面の末尾へ manifest 失敗を足して throw する", () => {
+  const events = [];
+  const msg = messageOfThrow(() =>
+    M.finishRun("items=2 applied=0 noref=0 nojpeg=2", FINISH_NONE_ROWS, "Error: boom", makeNotify(events)),
+  );
+  // 肝: manifest 例外を先に投げると未適用の内訳が消え、withManifestFailure を外すと
+  // manifest 失敗が消える。どちらの変異でもここが FAIL する。
+  assert.equal(msg, FINISH_NONE_MESSAGE + "\nmanifest 書き込み失敗: Error: boom");
+  assert.deepEqual(events, []);
+});
+
+// appendManifestOrError 検証用の Foundation fake。既存 makeBridge($ が恒等)と分けてあるのは、
+// 書き込み経路が `$(text).writeToFileAtomicallyEncodingError(...)` を要求し $ がラッパーを
+// 返す必要があるため。makeBridge を書き換えると readTextFile の「String() ではなく unwrap」
+// seam pin が弱まるので、別ヘルパとして持つ。
+function makeManifestBridge(store, opts = {}) {
+  const nsString = (content) => ({
+    __content: content,
+    toString: () => "[id __NSCFString]",
+    writeToFileAtomicallyEncodingError(dest) {
+      if (opts.failWrite) return false;
+      store[dest.__content] = content;
+      return true;
+    },
+  });
+  const $ = (x) => (x === undefined ? undefined : nsString(String(x)));
+  $.NSUTF8StringEncoding = 4;
+  $.NSString = {
+    stringWithContentsOfFileEncodingError: (p) =>
+      p.__content in store ? nsString(store[p.__content]) : null,
+  };
+  $.NSFileManager = {
+    defaultManager: {
+      createDirectoryAtPathWithIntermediateDirectoriesAttributesError: () => !opts.failMkdir,
+      fileExistsAtPath: (p) => p.__content in store,
+    },
+  };
+  const ObjC = {
+    import: () => {},
+    unwrap: (x) => (x && typeof x === "object" && "__content" in x ? x.__content : undefined),
+  };
+  return { $, ObjC };
+}
+
+test("appendManifestOrError: 書き込みに成功すれば null を返しファイルへ書く", () => {
+  const store = Object.create(null);
+  const Mb = loadModule(makeManifestBridge(store), ["appendManifestOrError"]);
+  const rows = [{ target: "a.dng", jpeg: "a.JPG", matchlook: "applied" }];
+  assert.equal(Mb.appendManifestOrError("/S", "2026-08-01 10:00:00", rows), null);
+  assert.equal(
+    store["/S/Output/matchlook_pairs.tsv"],
+    "# matchlook pairs log\tsession=/S\ntime\ttarget\tjpeg\tmatchlook\n" +
+      "2026-08-01 10:00:00\ta.dng\ta.JPG\tapplied\n",
+  );
+});
+
+test("appendManifestOrError: 書き込みに失敗しても throw せず例外の内容を返す", () => {
+  const store = Object.create(null);
+  const Mb = loadModule(makeManifestBridge(store, { failWrite: true }), ["appendManifestOrError"]);
+  const rows = [{ target: "a.dng", jpeg: null, matchlook: "-" }];
+  // 肝: try/catch を外して appendManifest を素通しにすると、ここが assert ではなく
+  // 例外で FAIL する(変異検出)。「投げずに保持する」が本タスクの前提。
+  const detail = Mb.appendManifestOrError("/S", "T", rows);
+  assert.equal(typeof detail, "string");
+  // withManifestFailure の空文字 pin が防御的である根拠(実経路の detail は常に非空)。
+  assert.notEqual(detail, "");
+  assert.match(detail, /ファイルを書き込めません: \/S\/Output\/matchlook_pairs\.tsv/);
+  // 失敗時はファイルを残さない(fake の write が false を返す経路であることの確認)。
+  assert.equal("/S/Output/matchlook_pairs.tsv" in store, false);
+});
+
+test("run: manifest 書き込みに失敗しても未適用のダイアログを先に出してから throw する(配線 pin)", () => {
+  const env = fakeRunEnv({ withJpeg: true, manifestFailure: true });
+  const err = runAndCatch(env);
+  assert.ok(err, "manifest 失敗は握りつぶさず throw する");
+  // 期待文面は formatSummary から組み立てる(CONFIG.manifestSubpath をテストへ literal で
+  // 再掲しない)。IMG1234 は applied、IMG5678 は同名 JPEG が無いので nojpeg。
+  const expected =
+    M.formatSummary(2, 1, 0, 1) +
+    "\nmanifest 書き込み失敗: Error: ファイルを書き込めません: /S/Output/matchlook_pairs.tsv";
+  assert.equal(String(err.message), expected);
+  // 肝: throw より先にダイアログが出ていること。run() の末尾を「manifest 例外を try の中で
+  // 投げる」旧形へ戻すと alerts が空になり、ここが FAIL する(この 1 件だけが run() の
+  // 配線 2 行を守る)。throw で run() が終わっている以上、記録があれば throw より前に起きている。
+  assert.deepEqual(env.calls.alerts, [
+    "1 件に適用、1 件を適用できませんでした。\n\n適用できなかった対象:\n  IMG5678.DNG (参照 JPEG なし)",
+  ]);
+  // 書き込みは失敗したのでファイルは残らない。calls.alerts / written はテスト側(main realm)の
+  // 値なので assert.deepEqual で比較してよい(vm realm のオブジェクトではない)。
+  assert.deepEqual(Object.keys(env.written), []);
+  // 適用そのものは 1 件ぶん走っている(参照セット + 適用で 2 クリック)。
+  assert.equal(env.calls.menuClicks, 2);
 });
