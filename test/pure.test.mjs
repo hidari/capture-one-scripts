@@ -21,6 +21,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
     "normalizeBulkStrings", "collectCollectionCandidates", "candidateEntries",
+    "readCollectionContents", "coverageOf", "pickBestCandidateIndex",
     "classifyOutcome", "notAppliedEntries",
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
@@ -878,4 +879,207 @@ test("candidateEntries: 診断用の label / count へ射影する(-1 の候補�
     { label: "?", count: -1 },
   ]);
   assertPlainEqual(M.candidateEntries([]), []);
+});
+
+// readCollectionContents 検査用の最小 fake。この関数が使うのは複数形アクセス
+// (collection.variants.name / collection.variants.parentImage.name)だけなので、
+// 実機の specifier のように関数化する必要はない(関数にすると name が Function.name と
+// 衝突して defineProperty が要る)。タスク 9 が同名のヘルパ fakeCollection を先に定義済みの
+// ため、こちらは fakeContentsCollection と別名にする(ESM のトップレベル関数宣言が重複すると
+// SyntaxError でテストファイル全体がパースできず、全件 0 実行になる)。
+function fakeContentsCollection(names, imageNames) {
+  return {
+    variants: {
+      name: () => names,
+      parentImage: { name: () => imageNames },
+    },
+  };
+}
+
+// coverageOf が受け取る contents は readCollectionContents が返す null-proto オブジェクト。
+// 通常の {} で作ると base==="constructor" が Object.prototype へ解決されて実装より緩い
+// 前提でテストしてしまうため、テスト側も同じ形で作る。
+function makeContents(map) {
+  const contents = Object.create(null);
+  for (const key of Object.keys(map)) contents[key] = map[key];
+  return contents;
+}
+
+// CollectionCandidate の最小形(pickBestCandidateIndex が見るのは coverage と count だけ)。
+function candidate(name, count, coverage) {
+  return { collection: name, id: name, name: name, count: count, coverage: coverage };
+}
+
+test("readCollectionContents: baseName ごとに parentImage 拡張子を出現順で集める", () => {
+  const col = fakeContentsCollection(
+    ["IMG1234", "IMG1234", "IMG9999"],
+    ["IMG1234.ARW", "IMG1234.JPG", "IMG9999.dng"],
+  );
+  const contents = M.readCollectionContents(col);
+  // vm realm の配列なので Array.from で main realm へ写してから比較する。
+  assert.deepEqual(Array.from(contents["img1234"]), ["arw", "jpg"]);
+  assert.deepEqual(Array.from(contents["img9999"]), ["dng"]);
+  assert.equal(contents["nope"], undefined);
+});
+
+test("readCollectionContents: 一括読みが throw したら null(検査失敗・例外は投げない)", () => {
+  const broken = {
+    variants: {
+      name: () => {
+        throw new Error("AX error");
+      },
+      parentImage: { name: () => [] },
+    },
+  };
+  assert.equal(M.readCollectionContents(broken), null);
+  // variants を持たない候補でも throw せず null を返す。
+  assert.equal(M.readCollectionContents({}), null);
+});
+
+test("readCollectionContents: 名前と拡張子の件数が食い違えば null(添字対応が壊れている)", () => {
+  // 肝: 件数不一致のまま索引化すると別 variant の拡張子と組み合わさり coverage が嘘になる。
+  assert.equal(M.readCollectionContents(fakeContentsCollection(["A", "B"], ["A.jpg"])), null);
+});
+
+test("readCollectionContents: 読めない要素はその添字だけ落とし、後続の対応をずらさない", () => {
+  const col = fakeContentsCollection(
+    ["IMG1", null, "", "IMG4"],
+    ["IMG1.arw", "IMG2.jpg", "IMG3.jpg", "IMG4.dng"],
+  );
+  const contents = M.readCollectionContents(col);
+  assert.deepEqual(Array.from(contents["img1"]), ["arw"]);
+  // 肝: 添字を詰める実装だと img4 が "jpg" を拾って FAIL する(変異検出)。
+  assert.deepEqual(Array.from(contents["img4"]), ["dng"]);
+  // 読めなかった添字はキーごと現れない(null を "null" として索引化しない)。
+  assert.deepEqual(Object.keys(contents).sort(), ["img1", "img4"]);
+});
+
+test("readCollectionContents: parentImage 名が空文字の添字も落とす", () => {
+  const contents = M.readCollectionContents(fakeContentsCollection(["IMG5"], [""]));
+  assert.deepEqual(Object.keys(contents), []);
+});
+
+test("readCollectionContents: constructor/__proto__ 名でもクラッシュしない(Object.create(null) を pin)", () => {
+  // {} に戻すと base in contents が誤って真になり push が TypeError -> catch で null になる。
+  // その結果この assert が TypeError で FAIL する(変異検出)。
+  const col = fakeContentsCollection(
+    ["constructor", "__proto__"],
+    ["constructor.dng", "__proto__.jpg"],
+  );
+  const contents = M.readCollectionContents(col);
+  assert.deepEqual(Array.from(contents["constructor"]), ["dng"]);
+  assert.deepEqual(Array.from(contents["__proto__"]), ["jpg"]);
+});
+
+test("coverageOf: 対象拡張子と JPEG が同居する baseName だけを数える", () => {
+  const contents = makeContents({
+    img1: ["arw", "jpg"],
+    img2: ["arw"],
+    img3: ["jpg"],
+    img4: ["dng", "jpeg"],
+  });
+  // 肝: && を || に緩めると 4 になり FAIL する(変異検出)。
+  assert.equal(M.coverageOf(contents, ["img1", "img2", "img3", "img4"], ["dng", "arw"], ["jpg", "jpeg"]), 2);
+});
+
+test("coverageOf: 索引に無い baseName と空の対象は 0", () => {
+  const contents = makeContents({ img1: ["arw", "jpg"] });
+  assert.equal(M.coverageOf(contents, ["nope"], ["dng", "arw"], ["jpg", "jpeg"]), 0);
+  assert.equal(M.coverageOf(contents, [], ["dng", "arw"], ["jpg", "jpeg"]), 0);
+});
+
+test("coverageOf: 片側だけのコレクションは 0(JPEG のみ / 対象のみ)", () => {
+  // References 相当(jpg のみ)と Denoised 相当(dng のみ)はどちらも coverage 0。
+  const jpegOnly = makeContents({ img1: ["jpg"], img2: ["jpg"] });
+  const targetOnly = makeContents({ img1: ["dng"], img2: ["dng"] });
+  assert.equal(M.coverageOf(jpegOnly, ["img1", "img2"], ["dng"], ["jpg"]), 0);
+  assert.equal(M.coverageOf(targetOnly, ["img1", "img2"], ["dng"], ["jpg"]), 0);
+});
+
+test("coverageOf: contents が null なら -1(検査失敗の番兵。0 と弁別する)", () => {
+  // 肝: -1 を 0 に丸めると「検査できなかった」と「同居が無い」が同点になり、
+  // pickBestCandidateIndex の件数フォールバックが効かなくなる。
+  assert.equal(M.coverageOf(null, ["img1"], ["dng"], ["jpg"]), -1);
+});
+
+test("pickBestCandidateIndex: coverage 最大を選ぶ(件数最大とは限らない)", () => {
+  // 実測セッション相当: References(jpg のみ・294)/ Denoised(dng のみ)/ All Images(614)。
+  // 肝: 件数を先に見る実装や、タイブレークで coverage 非同値を潰さない実装だと
+  // All Images(添字 2)を返して FAIL する(変異検出)。
+  const candidates = [
+    candidate("References", 294, 0),
+    candidate("Denoised", 22, 3),
+    candidate("All Images", 614, 0),
+  ];
+  assert.equal(M.pickBestCandidateIndex(candidates), 1);
+});
+
+test("pickBestCandidateIndex: coverage 同値は variant 数最大でタイブレークする", () => {
+  const candidates = [
+    candidate("Five Stars", 252, 5),
+    candidate("All Images", 614, 5),
+    candidate("Selects", 148, 2),
+  ];
+  assert.equal(M.pickBestCandidateIndex(candidates), 1);
+});
+
+test("pickBestCandidateIndex: coverage が全 0 なら件数最大(coverage 導入前と同じ選定)", () => {
+  const candidates = [
+    candidate("Selects", 148, 0),
+    candidate("All Images", 614, 0),
+    candidate("Capture", 146, 0),
+  ];
+  assert.equal(M.pickBestCandidateIndex(candidates), 1);
+});
+
+test("pickBestCandidateIndex: 検査が全滅(coverage 全 -1)でも件数最大で選ぶ", () => {
+  // 肝: 一括読みが使えない環境でも coverage 導入前の選定へ落ちる。フォールバックを外すと
+  // -1 が返り「切替先を決められません」で止まって FAIL する(変異検出)。
+  const candidates = [candidate("Selects", 148, -1), candidate("All Images", 614, -1)];
+  assert.equal(M.pickBestCandidateIndex(candidates), 1);
+});
+
+test("pickBestCandidateIndex: coverage 最大の候補が件数を読めなくても選ぶ", () => {
+  // 肝: 件数の番兵 -1 だけを理由に、検査できた候補を候補ごと捨てない。
+  const candidates = [candidate("All Images", 614, 0), candidate("Broken", -1, 4)];
+  assert.equal(M.pickBestCandidateIndex(candidates), 1);
+});
+
+test("pickBestCandidateIndex: 候補なし / 全滅は -1、完全同値は先勝ち", () => {
+  assert.equal(M.pickBestCandidateIndex([]), -1);
+  assert.equal(M.pickBestCandidateIndex([candidate("X", -1, -1), candidate("Y", -1, -1)]), -1);
+  assert.equal(M.pickBestCandidateIndex([candidate("A", 10, 2), candidate("B", 10, 2)]), 0);
+});
+
+test("pickBestCandidateIndex: coverage が全 0 で件数も全滅なら -1(診断契約を維持する)", () => {
+  // 肝: 「どのコレクションも件数を読めなければ『切替先のコレクションを決められません』で
+  // throw する」という現行の診断契約を coverage 導入で静かに壊さない。coverage 0 は
+  // 「同居が 1 件も無い」であって選ぶ根拠にはならないので、件数も読めなければ選定を諦める。
+  // coverage が 1 以上なら件数不明でも選ぶ(その対照は「coverage 最大の候補が件数を
+  // 読めなくても選ぶ」が持つ)。
+  assert.equal(M.pickBestCandidateIndex([candidate("A", -1, 0), candidate("B", -1, 0)]), -1);
+});
+
+// ensureWorkingCollection が pickBestCandidateIndex を実際に呼んでいることの配線テスト。
+// タスク 9 が callableSpecifier 化した fakeCollection の第 4 / 第 5 引数(names / imageNames)で
+// その候補の一括読みが返す variant 名と parentImage 名を与える。この 2 引数を省略した候補
+// (タスク 9 の characterization テスト 4 件)は一括読みが undefined を返すので
+// readCollectionContents が null -> coverage -1 になり、件数フォールバックで従来と同じ選定になる。
+test("ensureWorkingCollection: 件数最大ではなく coverage 最大のコレクションへ切り替える", () => {
+  // References 相当: 参照 JPEG だけが並ぶ大きなコレクション(294 件・対象の DNG は居ない)。
+  // Denoised 相当: 対象の DNG と同名 JPEG が同居する小さなコレクション(22 件)。
+  // 肝: pickBestCandidateIndex(candidates) を件数最大へ戻すと References(添字 0)へ
+  // 切り替わって FAIL する(変異検出)。
+  const references = fakeCollection("11", "References", 294, ["IMG1234"], ["IMG1234.jpg"]);
+  const denoised = fakeCollection(
+    "13",
+    "Denoised",
+    22,
+    ["IMG1234", "IMG1234"],
+    ["IMG1234.dng", "IMG1234.jpg"],
+  );
+  const { C1, doc, calls } = fakeCollectionsDoc([references, denoised], { currentId: "3" });
+  M.ensureWorkingCollection(C1, [WORK_ITEM]);
+  assert.equal(doc.currentCollection, denoised);
+  assert.deepEqual(calls.selected, ["V_TARGET"]);
 });

@@ -2,8 +2,8 @@
 
 // Capture One 用 JXA パイプライン(TypeScript ソース / 単一ファイル・import 禁止)。
 // C1 で選択中の RAW 対象に、同名の creative-look JPEG の look を Match Look(メニュー操作)で
-// 転写する。ペアリングは対象と JPEG を同一コレクション(ゴミ箱を除いて variant 数が最大のもの)に
-// 揃えて行い、フォルダ構成や PureRAW の有無に依存しない。処理結果は追記ログ(TSV)へ残す。
+// 転写する。ペアリングは対象と JPEG を同一コレクション(対象と同名 JPEG が最も多く同居する
+// もの)に揃えて行い、フォルダ構成や PureRAW の有無に依存しない。処理結果は追記ログ(TSV)へ残す。
 
 // 追記ログ(TSV)の matchlook 列が取りうる値。値の一覧はこの union が唯一の真実で、
 // 状態ごとの集計(MatchLookTally)も未適用理由への写像(MATCHLOOK_REASON)も Record で
@@ -492,6 +492,99 @@ function findVariantInIndex(
   return null;
 }
 
+// コレクション 1 件の中身。baseName(normalizeBase 済み・小文字) -> その名前を持つ
+// parentImage の拡張子(小文字)一覧(コレクション内の出現順)。
+type CollectionContents = Record<string, string[]>;
+
+// 候補コレクションの中身を複数形アクセスの一括読みで取る(currentCollection の切替は不要。
+// 実機で全 11 コレクションの検査が 550ms)。読めなければ null を返し throw しない。
+// 候補 1 件の検査失敗は「その候補を選ばない」で足り、他の候補が読めていれば選定は続けられる
+// (coverageOf が null を番兵へ写す)。索引本体の buildIndexFromBulk が件数不一致で throw する
+// のとは扱いが違うのは、あちらが誤った参照 JPEG を引く原因になるのに対し、こちらは選定の
+// ヒントに過ぎず、切替後の select 安全弁が最終判定を持つため。
+function readCollectionContents(collection: any): CollectionContents | null {
+  try {
+    const names = collection.variants.name() as unknown[];
+    const imageNames = collection.variants.parentImage.name() as unknown[];
+    // 件数が食い違うと別 variant の拡張子と組み合わさり coverage が嘘になる。検査失敗にする。
+    if (!names || !imageNames || names.length !== imageNames.length) return null;
+    // baseName をキーにするため null-proto を使う(buildIndexFromBulk と同じ理由。
+    // "constructor" / "__proto__" が Object.prototype と衝突すると in 判定が誤って真になり
+    // push が TypeError になる)。
+    const contents: CollectionContents = Object.create(null);
+    for (let i = 0; i < names.length; i++) {
+      const rawName = names[i];
+      const rawImageName = imageNames[i];
+      // 読めなかった要素はその添字だけ落とす。添字を詰めないので後続の対応はずれない。
+      if (rawName == null || rawImageName == null) continue;
+      const name = String(rawName);
+      const imageName = String(rawImageName);
+      if (!name || !imageName) continue;
+      const base = normalizeBase(name);
+      if (!(base in contents)) contents[base] = [];
+      contents[base].push(extOf(imageName));
+    }
+    return contents;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 選択中の対象のうち「対象自身の拡張子を持ち かつ 同名 JPEG も同じコレクションに居る」件数を
+// 数える(pure)。contents が null(検査失敗)なら -1 を返す。0(同居が無い)と同じ値へ潰すと、
+// 一括読みが使えない環境で全候補が同点になったことを pickBestCandidateIndex が判別できず、
+// 件数へのフォールバックが効かなくなる。
+function coverageOf(
+  contents: CollectionContents | null,
+  baseNames: string[],
+  targetExts: string[],
+  jpegExts: string[],
+): number {
+  if (contents === null) return -1;
+  let covered = 0;
+  for (const base of baseNames) {
+    const exts = contents[base];
+    if (!exts) continue;
+    let hasTarget = false;
+    let hasJpeg = false;
+    for (const ext of exts) {
+      if (targetExts.indexOf(ext) >= 0) hasTarget = true;
+      if (jpegExts.indexOf(ext) >= 0) hasJpeg = true;
+    }
+    if (hasTarget && hasJpeg) covered++;
+  }
+  return covered;
+}
+
+// 切替先の候補を選ぶ(pure)。coverage 最大 -> 同値なら variant 数最大の順で決める。
+// coverage が全 0(対象と JPEG が同居する候補が無い)なら件数最大へ落ちるため、coverage
+// 導入前と同じ選定になる。番兵 -1 の扱いは pickLargestIndex に委ねる(coverage の -1 は
+// 検査失敗、count の -1 は件数取得失敗で、どちらも候補には残すが選ばれない)。
+//
+// pickLargestIndex の呼び出しは最大 3 回(coverage 最大 / 同点タイブレーク / 検査が全滅した
+// ときの件数フォールバック)。2 回に減らすと coverage を読めない環境で -1 が返り
+// 「切替先のコレクションを決められません」で run 全体が止まる。現行コードなら動いていた環境を
+// 壊す退行なので、simplify やレビューで 2 回へ減らさないこと。
+function pickBestCandidateIndex(candidates: CollectionCandidate[]): number {
+  const coverages = candidates.map((c) => c.coverage);
+  const counts = candidates.map((c) => c.count);
+  const byCoverage = pickLargestIndex(coverages);
+  // どの候補も検査できなかった場合は件数だけで選ぶ。一括読みが使えない環境で選定ごと
+  // 失敗させないためのフォールバックで、切替後の select 安全弁はそのまま残る。
+  if (byCoverage < 0) return pickLargestIndex(counts);
+  const best = coverages[byCoverage];
+  // coverage が最大の候補だけを件数比較に残し、それ以外は番兵で候補外にする。
+  const tieCounts = counts.map((n, i) => (coverages[i] === best ? n : -1));
+  const byCount = pickLargestIndex(tieCounts);
+  if (byCount >= 0) return byCount;
+  // coverage 最大の候補がどれも件数を読めなかった場合。coverage が 1 以上なら対象と JPEG の
+  // 同居を実際に確認できているので coverage の先勝ちを採る(件数不明だけを理由に候補ごと
+  // 捨てない)。coverage が 0 なら選ぶ根拠が何も無いので -1 を返し、ensureWorkingCollection の
+  // 「切替先のコレクションを決められません」へ落とす(件数が全滅したら診断付きで止まるという
+  // 従来の契約を維持する)。
+  return best > 0 ? byCoverage : -1;
+}
+
 // 一括読み(複数形アクセス)の戻り値を文字列配列へ正規化する(pure)。配列でない、または
 // 件数が expected と違う場合は null を返し、呼び出し側を逐次読みへ落とす。件数の違う結果を
 // そのまま使うと添字とコレクションの対応が壊れ、別のコレクションの id / name を貼り付ける。
@@ -585,21 +678,36 @@ function candidateEntries(candidates: CollectionCandidate[]): { label: string; c
 // 対象と JPEG を同一コレクションに揃える。variants() は current collection スコープなので、
 // 対象のコレクションだけをブラウズ中だと JPEG が載らず Match Look の参照を引けない。
 //
-// 切替先は名前ではなく「ゴミ箱を除いて variant 数が最大」で決める(UI 言語に依存しない)。
-// ただし「最大 = 全画像コレクション」とは限らないため、切替後に対象を select して
-// 実際に作業可能であることを確認する。current collection 外の variant は C1 が select を
-// 拒否するので、成否がそのまま「切替先が対象を含むか」の判定になる。名前照合を撤去しても
-// 黙って誤ったコレクションで処理を続ける状態には落とさない。
+// 切替先は名前ではなく中身で決める(UI 言語に依存しない)。候補ごとに切替なしで一括読みして
+// coverage(選択中の対象と同名 JPEG が同居する件数)を測り、coverage 最大を選ぶ。同値なら
+// variant 数最大。検査がどの候補でも失敗した場合は件数最大へ落ちる。
+//
+// coverage は「良い候補を選ぶ」ためのものであり「選んだ候補が正しいことを証明する」ものでは
+// ない。検査で分かるのは「同名かつ対象拡張子の variant がそのコレクションに居る」ことまでで、
+// 選択中の対象 variant そのものが居ることではない(clone は元と同じ parentImage を持つため
+// baseName も拡張子も一致し、別コレクションの同名ファイルとも区別できない)。したがって
+// 切替後に対象を select する安全弁は必須であり、coverage が通ったことを理由に削ってはいけない。
 //
 // 候補の列挙(ゴミ箱の除外・id / name の読み取り・件数取得)は collectCollectionCandidates が
-// 持つ。ここは選定・切替・切替後の妥当性確認だけを行う。候補は添字を揃えた並行配列ではなく
-// レコード 1 本で持ち、id と名前と件数が別々の配列へずれて入る余地を無くしている。
+// 持つ。ここは選定・切替・切替後の妥当性確認だけを行う。
 function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   const doc = C1.currentDocument;
   const candidates = collectCollectionCandidates(C1);
+
+  // 候補の検査は currentCollection を切り替えずに行える(実機で全 11 コレクション 550ms)。
+  const baseNames = items.map((it) => it.baseName);
+  for (const cand of candidates) {
+    cand.coverage = coverageOf(
+      readCollectionContents(cand.collection),
+      baseNames,
+      CONFIG.rawTargetExts,
+      CONFIG.jpegExts,
+    );
+  }
+
   const entries = candidateEntries(candidates);
 
-  const pick = pickLargestIndex(candidates.map((c) => c.count));
+  const pick = pickBestCandidateIndex(candidates);
   if (pick < 0) {
     throw new Error("切替先のコレクションを決められません。候補: " + describeCounts(entries));
   }
@@ -617,7 +725,8 @@ function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   doc.currentCollection = candidates[pick].collection;
   delay(0.5); // 切替の反映待ち。plain delay を使う(run loop を pump しない)
 
-  // 安全弁: 対象が本当にこのコレクションに居ることを確認する。
+  // 安全弁: 対象が本当にこのコレクションに居ることを確認する。coverage は同名・同拡張子の
+  // variant が居ることしか示さないため、選択中の対象そのものの所在を確かめられるのはここだけ。
   try {
     doc.select({ variant: items[0].variant });
   } catch (e) {
@@ -906,8 +1015,8 @@ function run(): string {
   // バッチ進捗 HUD(生成失敗時 null で継続。以降 hud* は no-op になる)。
   const hud = createProgressHUD(items.length);
 
-  // ペアリングも Match Look も対象と JPEG を同一コレクションで引くため、ゴミ箱を除いて
-  // variant 数が最大のコレクションへ切り替える。切替前に元コレクションを控え、処理後に必ず戻す。
+  // ペアリングも Match Look も対象と JPEG を同一コレクションで引くため、対象と同名 JPEG が
+  // 最も多く同居するコレクションへ切り替える。切替前に元コレクションを控え、処理後に必ず戻す。
   let originalCollection: any = null;
   try {
     originalCollection = C1.currentDocument.currentCollection();
