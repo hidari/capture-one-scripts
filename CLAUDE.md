@@ -31,7 +31,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 
 ### タスク1 — ペアリング(切替先コレクション基準)
 
-`selectedTargetItems()` が(currentCollection 切替前に)選択中の variant を読み、`parentImage` の拡張子が `CONFIG.rawTargetExts` に含まれるものだけ WorkItem 化する(`baseName` は `stripSuffixes` 適用後・小文字、`variant` は選択時点の参照)。切替前に取得した variant 参照は切替後の `select` でもそのまま有効なため、対象は索引から引き直さない。JPEG のみ `CONFIG.jpegExts` で索引から引く。索引(`buildVariantIndex()`)は JPEG を引くためだけに `doc.variants()` を1回だけ全走査して `baseName` ごとに `{ext, variant}` の配列を作り、`parentImage` の拡張子で弁別する(同名の JPEG/RAW が並ぶ環境があるため)。`findVariantInIndex()` は出現順で最初に一致した variant を返す(同名衝突時の先勝ち)。
+`selectedTargetItems()` が(currentCollection 切替前に)選択中の variant を読み、`parentImage` の拡張子が `CONFIG.rawTargetExts` に含まれるものだけ WorkItem 化する(`baseName` は `stripSuffixes` 適用後・小文字、`variant` は選択時点の参照)。切替前に取得した variant 参照は切替後の `select` でもそのまま有効なため、対象は索引から引き直さない。JPEG のみ `CONFIG.jpegExts` で索引から引く。索引(`buildVariantIndex()`)は JPEG を引くためだけに作る。読み取りは `doc.variants()` / `doc.variants.name()` / `doc.variants.parentImage.name()` の複数形アクセス 3 本の一括読みで行い、`buildIndexFromBulk()` が 3 本を添字で対応づけて `baseName` ごとに `{ext, variant}` の配列を作り、`parentImage` の拡張子で弁別する(同名の JPEG/RAW が並ぶ環境があるため)。逐次に `v.name()` / `v.parentImage().name()` を引く旧実装は 614 variants で 16 秒かかっていた(実機実測)。3 本の長さが揃わなければ throw して中断する(fail-loud)。添字の対応が壊れた索引は「ある variant の名前」を「別の variant の拡張子」と組み合わせ、静かに誤った参照 JPEG を引くため、黙って続行しない。個別要素が読めない場合はその添字だけ skip し、後続の添字対応はずらさない。`findVariantInIndex()` は出現順で最初に一致した variant を返す(同名衝突時の先勝ち)。
 
 ### タスク2 — Match Look 適用(UI スクリプティング一択)
 
@@ -42,7 +42,7 @@ pkf run test                   # 純粋ロジックのユニットテスト(node
 - `variants()` は current collection スコープ。対象のコレクションだけをブラウズ中は JPEG が variants() に載らず、Match Look の参照 variant を引けない。そこで `ensureWorkingCollection()` が `currentCollection` を「対象と同名 JPEG が最も多く同居するコレクション(同値ならゴミ箱を除いて variant 数が最大)」へ設定して対象+JPEG を同一コレクションに揃え、処理後に元のコレクションへ戻す。対象と JPEG が同一セッションに import 済みであれば、ユーザーの手動お気に入り操作は不要。切替先には ARW/JPG/DNG が同名で並びうるが、拡張子弁別が必須なのは索引から引く JPEG 側だけ(対象は選択時点の variant 参照をそのまま使うため索引を経由しない)。
 - メニューの enabled 更新は非同期に遅延する。`d.select` 後すぐにメニューをクリックすると disabled で失敗する。`clickMenuItem()` は enabled をポーリング(最大約5秒)して true になった瞬間に click する。
 
-`findVariantInIndex()` は `buildVariantIndex()` が事前に索引化した `baseName` ごとの `{ext, variant}` 一覧から、期待拡張子(`CONFIG.jpegExts`)に一致する最初の variant を返す(JPEG 引きにのみ使う。対象は索引を経由しない)。索引化自体は `variant.name()`(拡張子なし・RAW/JPEG/DNG 同名)を `parentImage().name()` の拡張子で弁別して行う。これを怠ると同名衝突で自己適用の no-op になる。
+`findVariantInIndex()` は `buildVariantIndex()` が事前に索引化した `baseName` ごとの `{ext, variant}` 一覧から、期待拡張子(`CONFIG.jpegExts`)に一致する最初の variant を返す(JPEG 引きにのみ使う。対象は索引を経由しない)。索引化自体は `doc.variants.name()`(拡張子なし・RAW/JPEG/DNG 同名)を `doc.variants.parentImage.name()` の拡張子で弁別して行う(いずれも一括読みで、両者は同じ添字で対応する)。これを怠ると同名衝突で自己適用の no-op になる。
 
 ### タスク3 — ペアリング追記ログ
 

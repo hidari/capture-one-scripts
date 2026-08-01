@@ -453,28 +453,57 @@ function applyMatchLook_viaMenu(
 // baseName(stripSuffixes 済み・小文字) -> その名前を持つ variant の一覧(variants() 出現順)。
 type VariantIndex = Record<string, { ext: string; variant: C1Variant }[]>;
 
-// doc.variants() を 1 回だけ全走査して baseName ごとに索引化する。
-// 切替先コレクションには同名の ARW+JPG+DNG が並びうるため parentImage の拡張子も併せて持つ。
-function buildVariantIndex(C1: any): VariantIndex {
-  const doc = C1.currentDocument;
+// 一括読みで得た 3 本の配列(添字で対応)から索引を組む(pure)。
+// 長さが揃わない場合は throw する。ある variant の名前を別の variant の拡張子と組み合わせた
+// 索引は誤った参照 JPEG を引き、静かに間違った look を当てるため fail-loud にする。
+function buildIndexFromBulk(
+  variants: C1Variant[],
+  names: unknown[],
+  imageNames: unknown[],
+): VariantIndex {
+  if (names.length !== variants.length || imageNames.length !== variants.length) {
+    throw new Error(
+      "variants の一括読みで件数が食い違いました(variants=" + variants.length +
+        " names=" + names.length + " parentImage names=" + imageNames.length +
+        ")。添字の対応が壊れた索引は誤った参照 JPEG を引くため中断します。",
+    );
+  }
   // filename 由来の base をキーにするため null-proto オブジェクトを使う。通常の {} だと
   // base==="constructor"/"__proto__" が Object.prototype と衝突し `base in index` が誤って真になり、
   // index[base] が Function/prototype に解決されて .push が TypeError になる(run 全体がクラッシュ)。
   const index: VariantIndex = Object.create(null);
-  for (const v of doc.variants() as C1Variant[]) {
-    let base = "";
-    let imgExt = "";
-    try {
-      base = normalizeBase(String(v.name()));
-      imgExt = extOf(v.parentImage().name());
-    } catch (e) {
-      continue;
-    }
+  for (let i = 0; i < variants.length; i++) {
+    const variant = variants[i];
+    const rawName = names[i];
+    const rawImageName = imageNames[i];
+    // 読めなかった要素はその添字だけ落とす(逐次読み時代の per-variant try/catch の耐性)。
+    // 添字を詰めずに continue するため、後続の添字対応はずれない。
+    if (variant == null || rawName == null || rawImageName == null) continue;
+    const name = String(rawName);
+    const imageName = String(rawImageName);
+    if (!name || !imageName) continue;
+    // 索引側と照合側で同一キーにするため必ず normalizeBase(小文字化 → サフィックス除去)を通す。
+    const base = normalizeBase(name);
     if (!(base in index)) index[base] = [];
-    // variants() の出現順で push し、同名複数ヒット時の先勝ちを findVariantInIndex で再現する。
-    index[base].push({ ext: imgExt, variant: v });
+    // variants の出現順で push し、同名複数ヒット時の先勝ちを findVariantInIndex で再現する。
+    index[base].push({ ext: extOf(imageName), variant: variant });
   }
   return index;
+}
+
+// current collection の variants を baseName ごとに索引化する。
+// 切替先コレクションには同名の ARW+JPG+DNG が並びうるため parentImage の拡張子も併せて持つ。
+// 読み取りは複数形アクセスの一括読み 3 本で行う(readMenuTree と同じ手口)。逐次に
+// v.name() / v.parentImage().name() を引くと 614 variants で 16 秒かかる(実機実測)。
+// 3 本が同一の件数・同一の順序で返ることは実機で確認済みで、同名衝突の先勝ちも保たれる。
+// 一括読み自体が失敗した場合のフォールバックは持たない(1 回の Apple Event が失敗する状況
+// では逐次読みも失敗するため、複雑さに見合わない)。
+function buildVariantIndex(C1: any): VariantIndex {
+  const doc = C1.currentDocument;
+  const variants = doc.variants() as C1Variant[];
+  const names = doc.variants.name() as unknown[];
+  const imageNames = doc.variants.parentImage.name() as unknown[];
+  return buildIndexFromBulk(variants, names, imageNames);
 }
 
 // 索引から baseName + expectedExts に該当する variant を引く。variants() 出現順で

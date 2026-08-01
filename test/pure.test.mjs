@@ -17,7 +17,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
   const src = readFileSync(distJs, "utf8");
   const base = [
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
-    "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
+    "buildIndexFromBulk", "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
     "normalizeBulkStrings", "collectCollectionCandidates", "candidateEntries",
@@ -64,8 +64,22 @@ function makeBridge(store) {
 function fakeVariant(variantName, imageName) {
   return { name: () => variantName, parentImage: () => ({ name: () => imageName }) };
 }
-function fakeC1(variants) {
-  return { currentDocument: { variants: () => variants } };
+// JXA の doc.variants は「関数でもありプロパティも持つ」specifier。一括読み
+// (doc.variants.name() / doc.variants.parentImage.name())を模すため fake も同じ形にする。
+// specifier の生成は Task 9 が導入した callableSpecifier を再利用する(Function.prototype.name が
+// 非 writable であることの吸収もそちらに閉じている。specifier fake を新設しないこと)。
+// 既定は variants から名前配列を導出し、overrides で一括読みの戻り値だけを差し替えられる
+// (一括読みへの配線そのものの pin と、件数不一致の負のケースを作るため)。
+function fakeC1(variants, overrides = {}) {
+  const bulkNames = "names" in overrides ? overrides.names : variants.map((v) => v.name());
+  const bulkImageNames = "imageNames" in overrides
+    ? overrides.imageNames
+    : variants.map((v) => v.parentImage().name());
+  const specifier = callableSpecifier(() => variants, {
+    name: () => bulkNames,
+    parentImage: { name: () => bulkImageNames },
+  });
+  return { currentDocument: { variants: specifier } };
 }
 
 test("findVariantInIndex: 拡張子で弁別する(同名 ARW/JPG/DNG)", () => {
@@ -222,6 +236,93 @@ test("buildVariantIndex: constructor/__proto__ 名でもクラッシュせず索
   const idx = M.buildVariantIndex(C1);
   assert.equal(M.findVariantInIndex(idx, "constructor", ["dng"]).parentImage().name(), "constructor.dng");
   assert.equal(M.findVariantInIndex(idx, "__proto__", ["jpg"]).parentImage().name(), "__proto__.jpg");
+});
+
+test("buildIndexFromBulk: 3 本の配列を添字で対応づけて索引化する", () => {
+  const v0 = fakeVariant("IMG1234", "IMG1234.ARW");
+  const v1 = fakeVariant("IMG1234", "IMG1234.JPG");
+  const idx = M.buildIndexFromBulk([v0, v1], ["IMG1234", "IMG1234"], ["IMG1234.ARW", "IMG1234.JPG"]);
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["jpg"]), v1);
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["arw"]), v0);
+});
+
+test("buildIndexFromBulk: 長さが揃わなければ throw する(添字ずれの索引を作らない)", () => {
+  // 添字の対応が壊れた索引は「ある variant の名前」を「別の variant の拡張子」と組み合わせ、
+  // 誤った参照 JPEG を引く。静かに間違った look を当てるより止める(fail-loud)。
+  const v0 = fakeVariant("A", "A.dng");
+  const v1 = fakeVariant("B", "B.dng");
+  assert.throws(() => M.buildIndexFromBulk([v0, v1], ["A"], ["A.dng", "B.dng"]), /件数が食い違い/);
+  assert.throws(() => M.buildIndexFromBulk([v0, v1], ["A", "B"], ["A.dng"]), /件数が食い違い/);
+  assert.throws(() => M.buildIndexFromBulk([v0], ["A", "B"], ["A.dng", "B.dng"]), /件数が食い違い/);
+});
+
+test("buildIndexFromBulk: 読めない要素はその添字だけ skip し後続の対応をずらさない", () => {
+  // 肝: Object.keys の assert が無いと、null ガードを外しても String(null)==="null" という
+  // 誰も引かないキーが増えるだけで findVariantInIndex 側の assert は緑のままになる(dead pin)。
+  const v0 = fakeVariant("A", "A.dng");
+  const v1 = fakeVariant("B", "B.dng");
+  const v2 = fakeVariant("C", "C.jpg");
+  const v3 = fakeVariant("D", "D.jpg");
+  const idx = M.buildIndexFromBulk(
+    [v0, v1, v2, v3],
+    ["A", null, "C", "D"],
+    ["A.dng", "B.dng", undefined, "D.jpg"],
+  );
+  assert.deepEqual(Object.keys(idx).sort(), ["a", "d"]);
+  assert.equal(M.findVariantInIndex(idx, "a", ["dng"]), v0);
+  assert.equal(M.findVariantInIndex(idx, "b", ["dng"]), null);
+  assert.equal(M.findVariantInIndex(idx, "c", ["jpg"]), null);
+  // 添字を詰めて skip すると d が C.jpg 由来の拡張子と組になり、この assert が FAIL する。
+  assert.equal(M.findVariantInIndex(idx, "d", ["jpg"]), v3);
+});
+
+test("buildIndexFromBulk: 空文字の要素も skip する", () => {
+  const v0 = fakeVariant("A", "A.dng");
+  const v1 = fakeVariant("B", "B.dng");
+  const idx = M.buildIndexFromBulk([v0, v1], ["", "B"], ["A.dng", ""]);
+  assert.deepEqual(Object.keys(idx), []);
+});
+
+test("buildIndexFromBulk: 同名同拡張子が 2 件なら出現順で先勝ちになる", () => {
+  // 肝: index[base].push を index[base].unshift へ変えると b が先頭に来てこの assert が FAIL する。
+  // CLAUDE.md Known Limitations 4 の「同名衝突は出現順で先勝ち」を索引作成側で pin する
+  // (既存の findVariantInIndex テストは手組みの索引を使うのでこの経路を通らない)。
+  const a = fakeVariant("DUP", "DUP.JPG");
+  const b = fakeVariant("DUP", "DUP.jpg");
+  const idx = M.buildIndexFromBulk([a, b], ["DUP", "DUP"], ["DUP.JPG", "DUP.jpg"]);
+  assert.equal(M.findVariantInIndex(idx, "dup", ["jpg"]), a);
+});
+
+test("buildIndexFromBulk: 索引キーは normalizeBase を通す(小文字化 → サフィックス除去)", () => {
+  // 肝: normalizeBase(name) を name.toLowerCase() へ変えるとキーが "img1234-dxo" のまま残り、
+  // img1234 で引けず FAIL する(変異検出)。索引側と照合側が同一キーになることの pin。
+  const saved = M.CONFIG.stripSuffixes;
+  const v = fakeVariant("IMG1234-DxO", "IMG1234-DxO.dng");
+  try {
+    M.CONFIG.stripSuffixes = ["-dxo"];
+    const idx = M.buildIndexFromBulk([v], ["IMG1234-DxO"], ["IMG1234-DxO.dng"]);
+    assert.deepEqual(Object.keys(idx), ["img1234"]);
+    assert.equal(M.findVariantInIndex(idx, "img1234", ["dng"]), v);
+  } finally {
+    M.CONFIG.stripSuffixes = saved;
+  }
+});
+
+test("buildVariantIndex: 索引は一括読み(doc.variants.name / parentImage.name)から作る", () => {
+  // 肝: 逐次読み(v.name() / v.parentImage().name())へ戻すと索引キーが "decoy" になり、
+  // img1234 が引けず FAIL する(変異検出)。一括読みへの配線そのものの pin。
+  const C1 = fakeC1([fakeVariant("decoy", "decoy.txt")], {
+    names: ["IMG1234"],
+    imageNames: ["IMG1234.JPG"],
+  });
+  const idx = M.buildVariantIndex(C1);
+  assert.equal(M.findVariantInIndex(idx, "img1234", ["jpg"]).name(), "decoy");
+  assert.equal(M.findVariantInIndex(idx, "decoy", ["txt"]), null);
+});
+
+test("buildVariantIndex: 一括読みの件数が食い違えば throw する", () => {
+  const C1 = fakeC1([fakeVariant("A", "A.dng"), fakeVariant("B", "B.dng")], { names: ["A"] });
+  assert.throws(() => M.buildVariantIndex(C1), /件数が食い違い/);
 });
 
 test("progressLabel: 表示テキストを固定(done / total)", () => {
