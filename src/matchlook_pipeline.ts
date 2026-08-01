@@ -1113,6 +1113,21 @@ function notAppliedGuidanceLines(entries: NotAppliedEntry[]): string {
     .join("");
 }
 
+// 未適用 entry の detail を重複排除して出現順に並べる(pure)。detail は例外 message なので
+// 加工せず verbatim で載せる(分類器は作らない。分類しても verbatim を上回る情報が無い)。
+// 件数上限は設けない(手で数枚を選んで起動する運用であり distinct な理由は現実的に 1〜2 件)。
+// detail を持つ entry が無ければ空文字を返し、呼び出し側はセクションごと省略する。
+function formatFailureDetails(entries: NotAppliedEntry[]): string {
+  const details: string[] = [];
+  for (const e of entries) {
+    if (!e.detail) continue;
+    if (details.indexOf(e.detail) >= 0) continue;
+    details.push(e.detail);
+  }
+  if (details.length === 0) return "";
+  return "失敗の内容:\n" + details.map((d) => "  " + d).join("\n");
+}
+
 // 全件未適用のときに throw する文面(pure)。対処ガイダンスは notAppliedGuidanceLines が
 // entries に実際に含まれる reason のぶんだけ固定順(nojpeg → failed)で組み立てるため、
 // 存在しない理由への対処(例: failed しか無いのに JPEG import 確認を促す)が出ることは構造的に
