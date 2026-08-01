@@ -21,6 +21,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts",
     "classifyOutcome", "notAppliedEntries",
+    "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
     "noneAppliedMessage", "notAppliedAlertText",
   ];
@@ -345,6 +346,50 @@ test("classifyOutcome: 未適用件数から ok/none-applied/partial を判定�
   assert.equal(M.classifyOutcome(10, 9), "partial");
   // 対象 0 件は ok(早期 return で到達しないが防御的に)
   assert.equal(M.classifyOutcome(0, 0), "ok");
+});
+
+// matchlook の値(MatchLookStatus)による分岐は Record へ寄せてある。ここでは
+// (1) 値 -> 未適用理由の写像、(2) 状態ごとの排他集計、の 2 つを exact 値で pin する。
+// Record のキー過不足はコンパイルエラーで捕まるが、それは型検査であって実行時テストでは
+// 捕まらないため、キーが実行時にも揃っていることを Object.keys で別途 pin する。
+// 戻り値は vm realm のオブジェクトなので deepEqual に直接渡せない(プロトタイプ不一致で
+// 必ず落ちる)。キーごとの assert.equal と、main realm 側から呼ぶ Object.keys で比較する。
+test("matchLookReason: matchlook の値を未適用理由へ写す(applied は理由なし)", () => {
+  // 肝: applied は「未適用ではない」を null で表す。ここを "nojpeg" 等に変えると
+  // notAppliedEntries が applied 行まで拾い、既存の notAppliedEntries テストも FAIL する。
+  assert.equal(M.matchLookReason("applied"), null);
+  assert.equal(M.matchLookReason("no-ref"), "failed");
+  assert.equal(M.matchLookReason("-"), "nojpeg");
+});
+
+test("MATCHLOOK_REASON: キーは MatchLookStatus の全メンバ(過不足なし)", () => {
+  // Object.keys は main realm 側の呼び出しなので戻り値の配列も main realm(deepEqual 可)。
+  assert.deepEqual(Object.keys(M.MATCHLOOK_REASON).sort(), ["-", "applied", "no-ref"]);
+});
+
+test("tallyMatchlook: 状態ごとに排他集計する", () => {
+  const rows = [
+    { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
+    { target: "b.dng", jpeg: null, matchlook: "-" },
+    { target: "c.dng", jpeg: "c.JPG", matchlook: "no-ref" },
+    { target: "d.dng", jpeg: "d.JPG", matchlook: "applied" },
+  ];
+  const tally = M.tallyMatchlook(rows);
+  // 肝: 1 行はちょうど 1 つの状態に数えられる(合計 = rows.length)。
+  assert.equal(tally.applied, 2);
+  assert.equal(tally["no-ref"], 1);
+  assert.equal(tally["-"], 1);
+  assert.equal(tally.applied + tally["no-ref"] + tally["-"], rows.length);
+});
+
+test("tallyMatchlook: 空 rows は全キー 0(キーの初期化を pin)", () => {
+  const tally = M.tallyMatchlook([]);
+  // 肝: 初期化からキーを 1 つ落とすと undefined になりここが FAIL する(変異検出)。
+  // 該当 0 件の状態が undefined で返ると formatSummary が "noref=undefined" を出す。
+  assert.equal(tally.applied, 0);
+  assert.equal(tally["no-ref"], 0);
+  assert.equal(tally["-"], 0);
+  assert.deepEqual(Object.keys(tally).sort(), ["-", "applied", "no-ref"]);
 });
 
 // notAppliedEntries は vm 側で生成した配列(要素も vm realm のオブジェクト)を返す。assertMenuCommand

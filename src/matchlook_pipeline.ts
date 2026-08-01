@@ -5,15 +5,21 @@
 // 転写する。ペアリングは対象と JPEG を同一コレクション(ゴミ箱を除いて variant 数が最大のもの)に
 // 揃えて行い、フォルダ構成や PureRAW の有無に依存しない。処理結果は追記ログ(TSV)へ残す。
 
+// 追記ログ(TSV)の matchlook 列が取りうる値。値の一覧はこの union が唯一の真実で、
+// 状態ごとの集計(MatchLookTally)も未適用理由への写像(MATCHLOOK_REASON)も Record で
+// この union に従う。メンバを増やすと両方の Record がコンパイルエラーになるため、
+// 値による分岐の取りこぼしが型で捕まる。
+type MatchLookStatus = "applied" | "no-ref" | "-";
+
 // manifest 1 行の正規化単位。target=対象の原名、jpeg=参照 JPEG の原名(無ければ null)。
 type ManifestRow = {
   target: string;
   jpeg: string | null;
-  matchlook: "applied" | "no-ref" | "-";
+  matchlook: MatchLookStatus;
 };
 
-// Match Look を適用できなかった理由。追記ログの matchlook 値("-" / "no-ref")から導く。
-// 表示文言はここに持たず formatNotAppliedNames が持つ(判定値と表示文言を混ぜない)。
+// Match Look を適用できなかった理由。matchlook 値からの写像は MATCHLOOK_REASON が持つ。
+// 表示文言はここに持たず NOT_APPLIED_LABEL が持つ(判定値と表示文言を混ぜない)。
 type NotAppliedReason = "nojpeg" | "failed";
 
 // 未適用 1 件の正規化単位。target は対象の原名。
@@ -667,13 +673,42 @@ function classifyOutcome(itemCount: number, notAppliedCount: number): Outcome {
   return "partial";
 }
 
+// matchlook の値から未適用理由への写像。適用済みは未適用ではないので理由を持たない(null)。
+// Record なので MatchLookStatus にメンバが増えるとここがコンパイルエラーになる。
+// 未知値での実行時 throw は入れない: この写像は破壊的な Match Look 適用が完了した後に
+// 呼ばれるため、throw すると summary を載せない生の Error が飛び「ユーザーの写真に何をしたか」
+// を伝えられなくなる(CLAUDE.md Known Limitations 10 の fail-loud の型を破る)。
+const MATCHLOOK_REASON: Record<MatchLookStatus, NotAppliedReason | null> = {
+  applied: null,
+  "no-ref": "failed",
+  "-": "nojpeg",
+};
+
+// 上の写像を引く(pure)。呼び出し側が Record を直接触らずに済ませ、参照点を 1 つに保つ。
+function matchLookReason(status: MatchLookStatus): NotAppliedReason | null {
+  return MATCHLOOK_REASON[status];
+}
+
+// 状態ごとの件数。キーは MatchLookStatus の全メンバ(過不足は Record が型で捕まえる)。
+type MatchLookTally = Record<MatchLookStatus, number>;
+
+// 追記ログの行を状態ごとに数える(pure)。初期化がキーを全て持つため、該当 0 件の状態も
+// undefined ではなく 0 で返る。集計は排他(1 行はちょうど 1 つの状態に数えられる)。
+function tallyMatchlook(rows: ManifestRow[]): MatchLookTally {
+  const tally: MatchLookTally = { applied: 0, "no-ref": 0, "-": 0 };
+  for (const r of rows) tally[r.matchlook]++;
+  return tally;
+}
+
 // 追記ログの行から未適用のものだけを出現順に抜き出す(pure)。matchlook の値がそのまま
-// 理由になるので、集計とは別に数え直さない(rows が唯一の真実)。
+// 理由になるので、集計とは別に数え直さない(rows が唯一の真実)。理由への写像は
+// matchLookReason に閉じ、null(=適用済み)をそのまま除外条件に使う。
 function notAppliedEntries(rows: ManifestRow[]): NotAppliedEntry[] {
   const out: NotAppliedEntry[] = [];
   for (const r of rows) {
-    if (r.matchlook === "applied") continue;
-    out.push({ target: r.target, reason: r.matchlook === "no-ref" ? "failed" : "nojpeg" });
+    const reason = matchLookReason(r.matchlook);
+    if (reason === null) continue;
+    out.push({ target: r.target, reason: reason });
   }
   return out;
 }
@@ -682,10 +717,16 @@ function notAppliedEntries(rows: ManifestRow[]): NotAppliedEntry[] {
 // 制約ではないため CONFIG には置かない。throw の文面とアラート本文の双方で同じ値を使う。
 const NOT_APPLIED_NAME_LIMIT = 5;
 
-// 未適用の理由に対応するユーザー可視の文言(pure)。判定値(NotAppliedReason)と表示文言の
-// 対応はここ 1 箇所に閉じる。
+// 未適用の理由に対応するユーザー可視の文言。判定値(NotAppliedReason)と表示文言の対応は
+// ここ 1 箇所に閉じる。Record なので理由が増えるとコンパイルエラーになる。
+const NOT_APPLIED_LABEL: Record<NotAppliedReason, string> = {
+  nojpeg: "参照 JPEG なし",
+  failed: "適用に失敗",
+};
+
+// 上の対応表を引く(pure)。
 function notAppliedReasonLabel(reason: NotAppliedReason): string {
-  return reason === "failed" ? "適用に失敗" : "参照 JPEG なし";
+  return NOT_APPLIED_LABEL[reason];
 }
 
 // 未適用の対象を「  名前 (理由)」の行で並べる(pure)。max を超えた分は「  他 N 件」へ畳む。
@@ -817,7 +858,7 @@ function run(): string {
       done++;
       hudSetItem(hud, done, items.length, it.label);
       let jpegLabel: string | null = null;
-      let matchlook: ManifestRow["matchlook"] = "-";
+      let matchlook: MatchLookStatus = "-";
       try {
         const vi = getVariantIndex();
         // JPEG variant は対象と同じ baseName で引く(同名 import 前提)。
@@ -837,15 +878,13 @@ function run(): string {
     }
 
     // カウンタは rows(唯一の真実)から導出する。ループ中に別変数で数えると乖離しうる。
-    // matchlook は applied / no-ref / "-"(nojpeg) のいずれか 1 つを必ず持つので排他に集計できる。
-    const applied = rows.filter((r) => r.matchlook === "applied").length;
-    const noRef = rows.filter((r) => r.matchlook === "no-ref").length;
-    const noJpeg = rows.filter((r) => r.matchlook === "-").length;
+    // 状態ごとの排他集計は tallyMatchlook に閉じる(キーの過不足は Record が型で捕まえる)。
+    const tally = tallyMatchlook(rows);
 
     // 破壊的な Match Look 適用はこの時点で完了済み。summary(何件に何を適用したか)を先に
     // 組み立て、ログ保存が失敗しても summary を載せて throw する。fail-loud は保ちつつ、
     // 「ユーザーの写真に何をしたか」だけは必ず伝える(黙って applied=N を返して失敗を隠さない)。
-    summary = formatSummary(items.length, applied, noRef, noJpeg);
+    summary = formatSummary(items.length, tally.applied, tally["no-ref"], tally["-"]);
     try {
       appendManifest(root, stamp, rows);
     } catch (e) {
