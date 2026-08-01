@@ -20,6 +20,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
+    "normalizeBulkStrings",
     "classifyOutcome", "notAppliedEntries",
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
@@ -768,4 +769,33 @@ test("ensureWorkingCollection: 切替後に select できなければコレク�
       return true;
     },
   );
+});
+
+test("normalizeBulkStrings: 要素を文字列化して返す", () => {
+  assertPlainEqual(M.normalizeBulkStrings(["8", "11"], 2), ["8", "11"]);
+  assertPlainEqual(M.normalizeBulkStrings([8, 11], 2), ["8", "11"]);
+  assertPlainEqual(M.normalizeBulkStrings([], 0), []);
+});
+
+test("normalizeBulkStrings: 読めない要素(null / undefined)は空文字にする", () => {
+  // 要素 1 つが読めなくても他の候補を失わない(添字は詰めない)。
+  assertPlainEqual(M.normalizeBulkStrings([null, "A", undefined], 3), ["", "A", ""]);
+});
+
+test("normalizeBulkStrings: 件数が期待と違えば null(添字対応が壊れるため使わない)", () => {
+  // 肝: 長さ検査を外すと短い一括読み結果をそのまま使い、別コレクションの id / name を
+  // 貼り付ける。null を返して逐次読みへ落とすのが正しい(変異検出)。
+  assert.equal(M.normalizeBulkStrings(["A"], 2), null);
+  assert.equal(M.normalizeBulkStrings(["A", "B", "C"], 2), null);
+});
+
+test("normalizeBulkStrings: 配列でない戻り値は null(逐次読みへ落とす)", () => {
+  // 肝: これは先頭ガード `raw === null || typeof raw !== "object"` の pin。
+  // 文字列は length を持つので、このガードが無いと "AB" が長さ 2 の配列然として通り、
+  // ["A","B"] が id / name の一括読み結果として使われてしまう。
+  // (長さ検査 `len !== expected` はこの入力を弾かない。"AB".length は期待値 2 と一致する。)
+  assert.equal(M.normalizeBulkStrings("AB", 2), null);
+  assert.equal(M.normalizeBulkStrings(null, 0), null);
+  assert.equal(M.normalizeBulkStrings(undefined, 0), null);
+  assert.equal(M.normalizeBulkStrings({}, 0), null);
 });
