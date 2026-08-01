@@ -1135,21 +1135,27 @@ function formatFailureDetails(entries: NotAppliedEntry[]): string {
 // 何も適用していません。」は「C1 に残る前回の参照とこのスクリプトの動作は無関係」を明示する
 // 再発防止線(この取り違えが実際に起きたため文面で直接答える)。
 function noneAppliedMessage(summary: string, entries: NotAppliedEntry[]): string {
+  // 失敗理由(例外 message)は対象一覧とガイダンスの間に置く。何が起きたかを先に示し、
+  // 次に何をすべきかを示す順序にする。detail が無ければ空文字なのでセクションごと消える。
+  const details = formatFailureDetails(entries);
   return (
     "選択した " + entries.length + " 件すべてに Match Look を適用できませんでした。\n" +
     formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT) + "\n" +
+    (details ? details + "\n" : "") +
     notAppliedGuidanceLines(entries) +
     "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
     summary
   );
 }
 
-// 部分未適用のときにダイアログへ出す本文(pure)。
+// 部分未適用のときにダイアログへ出す本文(pure)。失敗理由は対象一覧の後ろへ 1 行空けて置く。
 function notAppliedAlertText(applied: number, entries: NotAppliedEntry[]): string {
+  const details = formatFailureDetails(entries);
   return (
     applied + " 件に適用、" + entries.length + " 件を適用できませんでした。\n\n" +
     "適用できなかった対象:\n" +
-    formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT)
+    formatNotAppliedNames(entries, NOT_APPLIED_NAME_LIMIT) +
+    (details ? "\n\n" + details : "")
   );
 }
 
