@@ -21,7 +21,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
     "normalizeBulkStrings", "collectCollectionCandidates", "candidateEntries",
-    "readCollectionContents", "coverageOf", "pickBestCandidateIndex",
+    "readCollectionContents", "coverageOf", "pickBestCandidateIndex", "collectionSwitchVerdict",
     "classifyOutcome", "notAppliedEntries",
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
@@ -1082,4 +1082,29 @@ test("ensureWorkingCollection: 件数最大ではなく coverage 最大のコレ
   M.ensureWorkingCollection(C1, [WORK_ITEM]);
   assert.equal(doc.currentCollection, denoised);
   assert.deepEqual(calls.selected, ["V_TARGET"]);
+});
+
+// collectionSwitchVerdict: コレクション切替の判定を 3 値で返す純粋関数。早期 return(既に
+// 切替先を見ている)の判定と、切替後の着地検証の両方がこの 1 本を読む。判定規則を 2 本の関数へ
+// 分けると片方だけ緩む drift が起きるため、規則をここで pin する。
+test("collectionSwitchVerdict: id が一致すれば ok", () => {
+  assert.equal(M.collectionSwitchVerdict("8", "8"), "ok");
+  // セッション標準のお気に入りは連番でなく語彙の id を持つ(trash / selects / output / capture)。
+  assert.equal(M.collectionSwitchVerdict("selects", "selects"), "ok");
+});
+
+test("collectionSwitchVerdict: id が異なれば mismatch", () => {
+  // 肝: 一致判定を常に "ok" へ倒す変異でここが FAIL する(変異検出)。
+  assert.equal(M.collectionSwitchVerdict("8", "11"), "mismatch");
+  assert.equal(M.collectionSwitchVerdict("11", "8"), "mismatch");
+});
+
+test("collectionSwitchVerdict: どちらかが空文字なら unverified(mismatch より優先)", () => {
+  // 肝 1: 空文字ガードを落とすと ("", "") が "ok" になり、id をどちらも読めない状態で
+  //       早期 return が誤発火する(切替せずに処理へ入る)。
+  assert.equal(M.collectionSwitchVerdict("", ""), "unverified");
+  // 肝 2: ガードを || から && へ緩めると片側だけ空のときに "mismatch" になり、
+  //       「id を読めないだけ」で切替を失敗として止めてしまう(変異検出)。
+  assert.equal(M.collectionSwitchVerdict("8", ""), "unverified");
+  assert.equal(M.collectionSwitchVerdict("", "8"), "unverified");
 });
