@@ -20,7 +20,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
-    "normalizeBulkStrings",
+    "normalizeBulkStrings", "collectCollectionCandidates", "candidateEntries",
     "classifyOutcome", "notAppliedEntries",
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
@@ -798,4 +798,84 @@ test("normalizeBulkStrings: 配列でない戻り値は null(逐次読みへ落�
   assert.equal(M.normalizeBulkStrings(null, 0), null);
   assert.equal(M.normalizeBulkStrings(undefined, 0), null);
   assert.equal(M.normalizeBulkStrings({}, 0), null);
+});
+
+test("collectCollectionCandidates: 一括読みの id / name で候補を組み、ゴミ箱を除外する", () => {
+  const cols = [
+    fakeCollection("8", "All Images", 614),
+    fakeCollection("trash", "Trash", 0),
+    fakeCollection("11", "References", 294),
+  ];
+  const { C1 } = fakeCollectionsDoc(cols);
+  const cands = M.collectCollectionCandidates(C1);
+  assert.equal(cands.length, 2);
+  assert.equal(cands[0].collection, cols[0]);
+  assert.equal(cands[0].id, "8");
+  assert.equal(cands[0].name, "All Images");
+  assert.equal(cands[0].count, 614);
+  // coverage は後段の検査が埋める枠。ここでは 0 初期化。
+  assert.equal(cands[0].coverage, 0);
+  assert.equal(cands[1].collection, cols[2]);
+  assert.equal(cands[1].id, "11");
+  assert.equal(cands[1].count, 294);
+});
+
+test("collectCollectionCandidates: 一括読みが通れば per-collection の逐次読みは行わない", () => {
+  // 肝: id / name は doc.collections.id() / .name() で 1 イベントに畳む(実測で id 8ms /
+  // name 6ms、逐次は合計 192ms)。逐次読みへ落ちると reads が 1 以上になり FAIL する。
+  const cols = [fakeCollection("8", "All Images", 614), fakeCollection("11", "References", 294)];
+  const { C1 } = fakeCollectionsDoc(cols);
+  M.collectCollectionCandidates(C1);
+  assert.deepEqual(cols.map((c) => c.reads), [{ id: 0, name: 0 }, { id: 0, name: 0 }]);
+});
+
+test("collectCollectionCandidates: 一括読みが throw したら逐次読みへフォールバックする", () => {
+  const cols = [fakeCollection("8", "All Images", 614), fakeCollection("trash", "Trash", 0)];
+  const { C1 } = fakeCollectionsDoc(cols, { bulk: "throw" });
+  const cands = M.collectCollectionCandidates(C1);
+  assert.equal(cands.length, 1);
+  assert.equal(cands[0].name, "All Images");
+  assert.equal(cands[0].count, 614);
+  assert.equal(cols[0].reads.id, 1);
+  assert.equal(cols[0].reads.name, 1);
+});
+
+test("collectCollectionCandidates: 一括読みの件数が合わなければ逐次読みへフォールバックする", () => {
+  // 件数の違う結果をそのまま使うと添字がずれ、References の id を All Images に貼り付ける。
+  const cols = [fakeCollection("8", "All Images", 614), fakeCollection("11", "References", 294)];
+  const { C1 } = fakeCollectionsDoc(cols, { bulk: "short" });
+  const cands = M.collectCollectionCandidates(C1);
+  assertPlainEqual(cands.map((c) => c.id + ":" + c.name), ["8:All Images", "11:References"]);
+});
+
+test("collectCollectionCandidates: 件数を取得できない候補も -1 で残す(除外しない)", () => {
+  // 肝: 除外すると全件失敗時に候補一覧が空になり、throw の診断が原因を示せなくなる。
+  const cols = [fakeCollection("8", "All Images", 614), fakeCollection("13", "Denoised", -1)];
+  const { C1 } = fakeCollectionsDoc(cols);
+  const cands = M.collectCollectionCandidates(C1);
+  assert.equal(cands.length, 2);
+  assert.equal(cands[1].name, "Denoised");
+  assert.equal(cands[1].count, -1);
+});
+
+test("collectCollectionCandidates: 名前を読めない候補は ? で残す", () => {
+  const cols = [fakeCollection("13", null, 22)];
+  const { C1 } = fakeCollectionsDoc(cols);
+  const cands = M.collectCollectionCandidates(C1);
+  assert.equal(cands.length, 1);
+  assert.equal(cands[0].id, "13");
+  assert.equal(cands[0].name, "?");
+  assert.equal(cands[0].count, 22);
+});
+
+test("candidateEntries: 診断用の label / count へ射影する(-1 の候補も残す)", () => {
+  const candidates = [
+    { collection: "C0", id: "8", name: "All Images", count: 614, coverage: 0 },
+    { collection: "C1", id: "13", name: "?", count: -1, coverage: 0 },
+  ];
+  assertPlainEqual(M.candidateEntries(candidates), [
+    { label: "All Images", count: 614 },
+    { label: "?", count: -1 },
+  ]);
+  assertPlainEqual(M.candidateEntries([]), []);
 });
