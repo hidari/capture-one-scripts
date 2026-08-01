@@ -720,8 +720,8 @@ test("notAppliedEntries: ManifestRow[] を直接渡すと黙って壊れず例�
 
 test("formatNotAppliedNames: 理由の文言を対応づける", () => {
   const entries = [
-    { target: "a.dng", reason: "nojpeg" },
-    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "nojpeg", detail: null },
+    { target: "b.dng", reason: "failed", detail: null },
   ];
   assert.equal(
     M.formatNotAppliedNames(entries, 5),
@@ -730,7 +730,7 @@ test("formatNotAppliedNames: 理由の文言を対応づける", () => {
 });
 
 test("formatNotAppliedNames: 上限ちょうどなら畳まない", () => {
-  const entries = [1, 2, 3].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  const entries = [1, 2, 3].map((n) => ({ target: n + ".dng", reason: "nojpeg", detail: null }));
   assert.equal(
     M.formatNotAppliedNames(entries, 3),
     "  1.dng (参照 JPEG なし)\n  2.dng (参照 JPEG なし)\n  3.dng (参照 JPEG なし)",
@@ -738,7 +738,7 @@ test("formatNotAppliedNames: 上限ちょうどなら畳まない", () => {
 });
 
 test("formatNotAppliedNames: 上限超過は「他 N 件」へ畳む", () => {
-  const entries = [1, 2, 3, 4, 5].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  const entries = [1, 2, 3, 4, 5].map((n) => ({ target: n + ".dng", reason: "nojpeg", detail: null }));
   assert.equal(
     M.formatNotAppliedNames(entries, 2),
     "  1.dng (参照 JPEG なし)\n  2.dng (参照 JPEG なし)\n  他 3 件",
@@ -752,7 +752,7 @@ test("formatNotAppliedNames: 上限は 5(既定値)", () => {
 // notAppliedGuidanceLines: entries に実際に含まれる reason のぶんだけ、対処ガイダンスを
 // 固定順(nojpeg → failed)で組み立てる。存在しない reason のガイダンスは出さない。
 test("notAppliedGuidanceLines: nojpeg のみなら JPEG 確認の行だけを出す", () => {
-  const entries = [{ target: "a.dng", reason: "nojpeg" }];
+  const entries = [{ target: "a.dng", reason: "nojpeg", detail: null }];
   assert.equal(
     M.notAppliedGuidanceLines(entries),
     "対象と同名の JPEG がこのセッションに import されているか確認してください。\n",
@@ -760,7 +760,7 @@ test("notAppliedGuidanceLines: nojpeg のみなら JPEG 確認の行だけを出
 });
 
 test("notAppliedGuidanceLines: failed のみなら再実行の行だけを出す(JPEG 確認の行は出ない)", () => {
-  const entries = [{ target: "a.dng", reason: "failed" }];
+  const entries = [{ target: "a.dng", reason: "failed", detail: null }];
   assert.equal(
     M.notAppliedGuidanceLines(entries),
     "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n",
@@ -769,12 +769,12 @@ test("notAppliedGuidanceLines: failed のみなら再実行の行だけを出す
 
 test("notAppliedGuidanceLines: 両方の reason が混在すると entries の出現順によらず固定順(nojpeg → failed)で出す", () => {
   const forward = [
-    { target: "a.dng", reason: "nojpeg" },
-    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "nojpeg", detail: null },
+    { target: "b.dng", reason: "failed", detail: null },
   ];
   const reversed = [
-    { target: "b.dng", reason: "failed" },
-    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "failed", detail: null },
+    { target: "a.dng", reason: "nojpeg", detail: null },
   ];
   const expected =
     "対象と同名の JPEG がこのセッションに import されているか確認してください。\n" +
@@ -821,8 +821,8 @@ test("formatFailureDetails: detail を持たない entry が混ざっても fail
 
 test("noneAppliedMessage: 件数・対象・注意書き・summary を含む(failed 混在で再実行行も出る)", () => {
   const entries = [
-    { target: "a.dng", reason: "nojpeg" },
-    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "nojpeg", detail: null },
+    { target: "b.dng", reason: "failed", detail: null },
   ];
   const msg = M.noneAppliedMessage("items=2 applied=0 noref=1 nojpeg=1", entries);
   assert.equal(
@@ -839,8 +839,8 @@ test("noneAppliedMessage: 件数・対象・注意書き・summary を含む(fai
 
 test("noneAppliedMessage: reason が failed を含まなければ再実行を促す行を足さない", () => {
   const entries = [
-    { target: "a.dng", reason: "nojpeg" },
-    { target: "b.dng", reason: "nojpeg" },
+    { target: "a.dng", reason: "nojpeg", detail: null },
+    { target: "b.dng", reason: "nojpeg", detail: null },
   ];
   const msg = M.noneAppliedMessage("items=2 applied=0 noref=0 nojpeg=2", entries);
   assert.equal(
@@ -856,8 +856,8 @@ test("noneAppliedMessage: reason が failed を含まなければ再実行を促
 
 test("noneAppliedMessage: reason が nojpeg を含まなければ JPEG 確認の行を出さない(全件 failed)", () => {
   const entries = [
-    { target: "a.dng", reason: "failed" },
-    { target: "b.dng", reason: "failed" },
+    { target: "a.dng", reason: "failed", detail: null },
+    { target: "b.dng", reason: "failed", detail: null },
   ];
   const msg = M.noneAppliedMessage("items=2 applied=0 noref=2 nojpeg=0", entries);
   assert.equal(
@@ -873,8 +873,8 @@ test("noneAppliedMessage: reason が nojpeg を含まなければ JPEG 確認の
 
 test("noneAppliedMessage: 混在時のガイダンス順は entries の出現順によらず固定(nojpeg → failed)", () => {
   const entries = [
-    { target: "b.dng", reason: "failed" },
-    { target: "a.dng", reason: "nojpeg" },
+    { target: "b.dng", reason: "failed", detail: null },
+    { target: "a.dng", reason: "nojpeg", detail: null },
   ];
   const msg = M.noneAppliedMessage("items=2 applied=0 noref=1 nojpeg=1", entries);
   assert.equal(
@@ -895,7 +895,7 @@ test("noneAppliedMessage: 混在時のガイダンス順は entries の出現順
 // 折り畳みが noneAppliedMessage 経由でも起きることだけを見る(reason は failed を含めず
 // 再実行行の有無と混同しない)。
 test("noneAppliedMessage: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」へ畳む(配線 pin)", () => {
-  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg", detail: null }));
   const msg = M.noneAppliedMessage("items=6 applied=0 noref=0 nojpeg=6", entries);
   assert.equal(
     msg,
@@ -913,7 +913,7 @@ test("noneAppliedMessage: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」�
 });
 
 test("notAppliedAlertText: 適用件数と未適用件数を出す", () => {
-  const entries = [{ target: "x.dng", reason: "nojpeg" }];
+  const entries = [{ target: "x.dng", reason: "nojpeg", detail: null }];
   assert.equal(
     M.notAppliedAlertText(9, entries),
     "9 件に適用、1 件を適用できませんでした。\n\n" +
@@ -925,7 +925,7 @@ test("notAppliedAlertText: 適用件数と未適用件数を出す", () => {
 // noneAppliedMessage と同様、NOT_APPLIED_NAME_LIMIT を超えるエントリで notAppliedAlertText を
 // 通し、formatNotAppliedNames への配線を pin する(配線 pin)。
 test("notAppliedAlertText: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」へ畳む(配線 pin)", () => {
-  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg" }));
+  const entries = [1, 2, 3, 4, 5, 6].map((n) => ({ target: n + ".dng", reason: "nojpeg", detail: null }));
   assert.equal(
     M.notAppliedAlertText(3, entries),
     "3 件に適用、6 件を適用できませんでした。\n\n" +
