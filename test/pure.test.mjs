@@ -19,7 +19,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "stripSuffixes", "normalizeBase", "formatStamp", "joinPath", "parentDir", "extOf",
     "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
-    "findMenuCommand", "pickLargestIndex", "describeCounts",
+    "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
     "classifyOutcome", "notAppliedEntries",
     "MATCHLOOK_REASON", "matchLookReason", "tallyMatchlook",
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
@@ -606,5 +606,166 @@ test("notAppliedAlertText: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」
       "  4.dng (参照 JPEG なし)\n" +
       "  5.dng (参照 JPEG なし)\n" +
       "  他 1 件",
+  );
+});
+
+// ================= JXA specifier の共通 fake =================
+// JXA の specifier は「関数として呼べて、かつプロパティも持つ」形をしている
+// (doc.collections() で配列、doc.collections.id() で id の一括読み)。fake も同じ形にする。
+// Function.prototype.name は非 writable なので `fn.name = ...` では置けない。このテストファイルは
+// ESM で常に strict mode なので、代入すると黙って無視されるのではなく TypeError で落ちる。
+// 必ず Object.defineProperty で置く。specifier の fake はこのヘルパ 1 本だけを通し、
+// タスク 1(fakeC1 の一括読み)とタスク 3(fakeRunEnv)もこれを再利用する(独自実装を新設しない)。
+function callableSpecifier(callImpl, props) {
+  const fn = (...args) => callImpl(...args);
+  for (const key of Object.keys(props)) {
+    Object.defineProperty(fn, key, { value: props[key], writable: true, configurable: true });
+  }
+  return fn;
+}
+
+// ================= コレクション候補(ensureWorkingCollection 周辺)の fake =================
+// 一括読み(doc.collections.id())は __id / __name を直接読み、逐次読み(cols[i].id())は
+// reads カウンタを進めるので、どちらの経路を通ったかをテスト側から判別できる。
+// count が負なら variants() が throw する(件数を取得できない候補の再現)。
+// name が null なら逐次読みで name() が throw し、一括読みでは null 要素として返る。
+// variants は callableSpecifier で作る。素の関数にすると variants.name が
+// Function.prototype.name(文字列 "variants")になり、タスク 2 の readCollectionContents が
+// 「読めない」のではなく「関数でない値を呼んだ TypeError」で null へ落ちる。狙って中身を
+// 読ませないのか偶然壊れているのかを区別できないので、specifier の形は正しく作る。
+// names / imageNames はコレクションの中身の一括読み(collection.variants.name() /
+// collection.variants.parentImage.name())が返す値。省略するとその 2 つは undefined を返し、
+// readCollectionContents が null を返して coverage が -1(検査失敗)になる。
+// タスク 2 の coverage 配線テストだけがこの 2 引数を渡す。
+function fakeCollection(id, name, count, names, imageNames) {
+  const col = {
+    __id: id,
+    __name: name,
+    reads: { id: 0, name: 0 },
+    id: () => {
+      col.reads.id++;
+      return id;
+    },
+    name: () => {
+      col.reads.name++;
+      if (name === null) throw new Error("name unreadable");
+      return name;
+    },
+    variants: callableSpecifier(
+      () => {
+        if (count < 0) throw new Error("variants unreadable");
+        return new Array(count).fill(null);
+      },
+      { name: () => names, parentImage: { name: () => imageNames } },
+    ),
+  };
+  return col;
+}
+
+// doc.collections を「関数でありプロパティ(複数形アクセス)も持つ」形にする。
+// bulkMode: "ok"=一括読みが通る / "throw"=一括読みが失敗する / "short"=件数が食い違う。
+function fakeCollectionsAccessor(cols, bulkMode) {
+  const bulk = (prop) => () => {
+    if (bulkMode === "throw") throw new Error("bulk read unavailable");
+    const all = cols.map((c) => c["__" + prop]);
+    return bulkMode === "short" ? all.slice(1) : all;
+  };
+  return callableSpecifier(() => cols, { id: bulk("id"), name: bulk("name") });
+}
+
+// opts:
+//   currentId    切替前の currentCollection の id(既定 "")
+//   bulk         fakeCollectionsAccessor の bulkMode(既定 "ok")
+//   selected     doc.variants.whose({selected:true})() が返す配列(既定 [])
+//   selectThrows doc.select が throw する(切替後の安全弁の失敗を再現)
+//   landingId    切替代入のあと doc.currentCollection() が返すコレクションの id を強制する
+//                (切替が着地しなかった環境の再現。タスク 5 の mismatch throw の pin に使う)
+function fakeCollectionsDoc(cols, opts = {}) {
+  const calls = { selected: [], deselected: [] };
+  const variants = callableSpecifier(() => [], { whose: () => () => opts.selected || [] });
+  const doc = {
+    collections: fakeCollectionsAccessor(cols, opts.bulk || "ok"),
+    variants: variants,
+    select: (arg) => {
+      if (opts.selectThrows) throw new Error("cannot select");
+      calls.selected.push(arg.variant);
+    },
+    deselect: (arg) => {
+      calls.deselected.push(arg.variants);
+    },
+  };
+  // currentCollection は「setter で保存した値を getter がそのまま返す」形にする。
+  // 初期値は呼べば現在の id を返す関数で、ensureWorkingCollection の切替前の読み取りに応える。
+  // 切替代入のあとは、
+  //   landingId なし: 代入された値そのものを保持する(doc.currentCollection === 代入したコレクション
+  //                   になるので切替代入が起きたことを直接観測できる。呼び出せないので
+  //                   タスク 5 の着地 id の読み取りは unverified になる)
+  //   landingId あり: 呼べば landingId を返す関数を保持する(切替後に読み直した id が代入した
+  //                   コレクションの id と食い違う環境の再現)
+  // 素のデータプロパティ(doc.currentCollection = ...)に戻さないこと。戻すと landingId を
+  // 渡しても切替後の読み直しが常に TypeError になり、タスク 5 の mismatch 経路が 1 度も通らない。
+  let current = () => ({ id: () => String(opts.currentId || "") });
+  Object.defineProperty(doc, "currentCollection", {
+    get: () => current,
+    set: (col) => {
+      current = opts.landingId === undefined ? col : () => ({ id: () => String(opts.landingId) });
+    },
+    configurable: true,
+  });
+  return { C1: { currentDocument: doc }, doc: doc, calls: calls };
+}
+
+// ensureWorkingCollection へ渡す対象 1 件(select の引数として同一性だけを見る)。
+const WORK_ITEM = { baseName: "img1234", label: "IMG1234.dng", variant: "V_TARGET" };
+
+test("ensureWorkingCollection: 件数を取得できない候補も一覧に残して throw する(-1 番兵)", () => {
+  // 肝: 件数 -1 の候補をフィルタで落とすと describeCounts が空文字になり、throw の
+  // 原因(どのコレクションも読めなかったこと)が診断から消える(変異検出)。
+  const cols = [fakeCollection("8", "All Images", -1), fakeCollection("11", "References", -1)];
+  const { C1 } = fakeCollectionsDoc(cols);
+  assert.throws(
+    () => M.ensureWorkingCollection(C1, [WORK_ITEM]),
+    (e) => {
+      assert.match(e.message, /^切替先のコレクションを決められません。/);
+      assert.match(e.message, /候補: All Images\(-1\), References\(-1\)$/);
+      return true;
+    },
+  );
+});
+
+test("ensureWorkingCollection: ゴミ箱を除く件数最大へ切り替え、対象を select して選択を戻す", () => {
+  // trash は件数が最大でも言語非依存の id で除外する。
+  const cols = [
+    fakeCollection("3", "Capture", 146),
+    fakeCollection("8", "All Images", 614),
+    fakeCollection("trash", "Trash", 999),
+  ];
+  const { C1, doc, calls } = fakeCollectionsDoc(cols, { currentId: "3", selected: ["V_SEL"] });
+  M.ensureWorkingCollection(C1, [WORK_ITEM]);
+  // landingId を渡していないので、切替代入後の currentCollection は代入した値そのもの。
+  assert.equal(doc.currentCollection, cols[1]);
+  assert.deepEqual(calls.selected, ["V_TARGET"]);
+  assert.deepEqual(calls.deselected, [["V_SEL"]]);
+});
+
+test("ensureWorkingCollection: 既に切替先を見ているなら切り替えない(id 一致で早期 return)", () => {
+  const cols = [fakeCollection("3", "Capture", 146), fakeCollection("8", "All Images", 614)];
+  const { C1, doc, calls } = fakeCollectionsDoc(cols, { currentId: "8" });
+  M.ensureWorkingCollection(C1, [WORK_ITEM]);
+  // 切替代入が起きていなければ currentCollection は fake の初期値(関数)のまま。
+  assert.equal(typeof doc.currentCollection, "function");
+  assert.deepEqual(calls.selected, []);
+});
+
+test("ensureWorkingCollection: 切替後に select できなければコレクション名と候補を添えて throw", () => {
+  const cols = [fakeCollection("8", "All Images", 614), fakeCollection("11", "References", 294)];
+  const { C1 } = fakeCollectionsDoc(cols, { currentId: "3", selectThrows: true });
+  assert.throws(
+    () => M.ensureWorkingCollection(C1, [WORK_ITEM]),
+    (e) => {
+      assert.match(e.message, /切替先コレクション「All Images」で対象を選択できません/);
+      assert.match(e.message, /候補: All Images\(614\), References\(294\)$/);
+      return true;
+    },
   );
 });
