@@ -701,6 +701,8 @@ function collectionSwitchVerdict(expectedId: string, actualId: string): SwitchVe
 //
 // 候補の列挙(ゴミ箱の除外・id / name の読み取り・件数取得)は collectCollectionCandidates が
 // 持つ。ここは選定・切替・切替後の妥当性確認だけを行う。
+// 切替後は currentCollection の id を読み直して着地を確認する。id が一致しない場合は診断付きで
+// throw し、id を読めない場合は下の select 安全弁へ委ねる(判定は collectionSwitchVerdict)。
 function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   const doc = C1.currentDocument;
   const candidates = collectCollectionCandidates(C1);
@@ -724,17 +726,43 @@ function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   }
 
   // 既に切替先を見ているなら何もしない(選択元のコレクションなので対象を含むことは自明)。
-  // 同名のコレクションが複数ありうるため、比較は名前ではなく id で行う。
+  // 同名のコレクションが複数ありうるため、比較は名前ではなく id で行う。id を読めない場合は
+  // 判定不能なので切替へ進む(安全側)。判定規則は collectionSwitchVerdict が唯一の真実。
   let currentId = "";
   try {
     currentId = String(doc.currentCollection().id());
   } catch (e) {
     /* 取れなければ切替を行う(安全側) */
   }
-  if (currentId && currentId === candidates[pick].id) return;
+  if (collectionSwitchVerdict(candidates[pick].id, currentId) === "ok") return;
 
   doc.currentCollection = candidates[pick].collection;
   delay(0.5); // 切替の反映待ち。plain delay を使う(run loop を pump しない)
+
+  // 着地検証: 切替後の currentCollection を読み直して期待した id と突き合わせる。
+  // doc.currentCollection() が返すのは live specifier ではない具体参照なので、切替前に取った
+  // 参照を読んでも古い値のままになる(実測)。必ずここで読み直す。
+  // mismatch のときだけ止める。unverified(id を読めない)は下の select 安全弁へ委ねる
+  // (id が読めないこと自体は切替の失敗を意味しない)。リトライは持たない
+  // (切替代入が無視される事象は未観測。観測されてから足す)。
+  let landedId = "";
+  try {
+    landedId = String(doc.currentCollection().id());
+  } catch (e) {
+    /* 読めなければ unverified 扱いで select 安全弁へ委ねる */
+  }
+  if (collectionSwitchVerdict(candidates[pick].id, landedId) === "mismatch") {
+    throw new Error(
+      "コレクションの切替が着地しませんでした。切替先「" +
+        candidates[pick].name +
+        "」(id=" +
+        candidates[pick].id +
+        ")を指定しましたが、現在のコレクションは id=" +
+        landedId +
+        " です。候補: " +
+        describeCounts(entries),
+    );
+  }
 
   // 安全弁: 対象が本当にこのコレクションに居ることを確認する。coverage は同名・同拡張子の
   // variant が居ることしか示さないため、選択中の対象そのものの所在を確かめられるのはここだけ。

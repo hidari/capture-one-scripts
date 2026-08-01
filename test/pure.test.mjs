@@ -1108,3 +1108,43 @@ test("collectionSwitchVerdict: どちらかが空文字なら unverified(mismatc
   assert.equal(M.collectionSwitchVerdict("8", ""), "unverified");
   assert.equal(M.collectionSwitchVerdict("", "8"), "unverified");
 });
+
+// ============ ensureWorkingCollection への配線(collectionSwitchVerdict)============
+// fake はタスク 9 が追加した fakeCollection / fakeCollectionsDoc / WORK_ITEM をそのまま使う
+// (新しい fake を作らない)。この fake はコレクションの中身を読めないので coverage は全候補で
+// 同点になり、pickBestCandidateIndex は件数フォールバックで件数最大(添字 1)を選ぶ。
+// landingId を渡さない場合、切替代入後の doc.currentCollection は代入した値そのものになり
+// 呼び出せない(= 着地 id を読めない)ので、着地検証は unverified になる。
+
+test("ensureWorkingCollection: currentId を読めなくても切替へ進み、着地 id 不明でも止めない", () => {
+  // 肝 1: 早期 return を === "ok" から !== "mismatch" へ緩めると、id を読めない環境で
+  //       切替せずに処理へ入る。切替代入が起きず currentCollection が fake の getter 関数の
+  //       ままになるのでここが FAIL する(変異検出)。
+  // 肝 2: 着地検証を === "mismatch" から !== "ok" へ緩めると、着地 id を読めないこの経路で
+  //       throw してしまい、ここが「コレクションの切替が着地しませんでした」で FAIL する。
+  const cols = [fakeCollection("3", "Capture", 146), fakeCollection("8", "All Images", 614)];
+  const { C1, doc, calls } = fakeCollectionsDoc(cols, { currentId: "" });
+  M.ensureWorkingCollection(C1, [WORK_ITEM]);
+  assert.equal(doc.currentCollection, cols[1]);
+  // 着地 id が読めなくても select 安全弁まで到達する(id を読めないこと自体は失敗ではない)。
+  assert.deepEqual(calls.selected, ["V_TARGET"]);
+});
+
+test("ensureWorkingCollection: 切替後の id が期待と違えば候補一覧を添えて throw する", () => {
+  // 肝: landedId を読み直さず currentId を使い回すと、文面の id が着地後の 99 ではなく
+  //     切替前の 3 になってここが FAIL する(変異検出)。
+  const cols = [fakeCollection("3", "Capture", 146), fakeCollection("8", "All Images", 614)];
+  const { C1, calls } = fakeCollectionsDoc(cols, { currentId: "3", landingId: "99" });
+  assert.throws(
+    () => M.ensureWorkingCollection(C1, [WORK_ITEM]),
+    (e) => {
+      assert.match(e.message, /^コレクションの切替が着地しませんでした。/);
+      assert.match(e.message, /切替先「All Images」\(id=8\)/);
+      assert.match(e.message, /現在のコレクションは id=99 です/);
+      assert.match(e.message, /候補: Capture\(146\), All Images\(614\)$/);
+      return true;
+    },
+  );
+  // 着地検証は select 安全弁より前で止める(誤ったコレクションで対象に触らない)。
+  assert.deepEqual(calls.selected, []);
+});
