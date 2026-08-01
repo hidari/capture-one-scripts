@@ -28,7 +28,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "NOT_APPLIED_NAME_LIMIT", "formatNotAppliedNames", "notAppliedGuidanceLines",
     "noneAppliedMessage", "notAppliedAlertText",
     "withManifestFailure", "finishRun",
-    "errorMessage",
+    "errorMessage", "formatFailureDetails",
   ];
   const exposed = base.concat(extraExposed);
   const epilogue = "\n;globalThis.__M = { " + exposed.join(", ") + " };\n";
@@ -781,6 +781,42 @@ test("notAppliedGuidanceLines: 両方の reason が混在すると entries の�
     "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n";
   assert.equal(M.notAppliedGuidanceLines(forward), expected);
   assert.equal(M.notAppliedGuidanceLines(reversed), expected);
+});
+
+// formatFailureDetails: 適用に失敗した entry の detail(例外 message)を重複排除して
+// 出現順に並べる。detail を持つ entry が無ければセクションごと省略できるよう空文字を返す。
+test("formatFailureDetails: detail を持つ entry が無ければ空文字", () => {
+  assert.equal(M.formatFailureDetails([]), "");
+  assert.equal(
+    M.formatFailureDetails([
+      { target: "a.dng", reason: "nojpeg", detail: null },
+      { target: "b.dng", reason: "nojpeg", detail: null },
+    ]),
+    "",
+  );
+});
+
+test("formatFailureDetails: 重複を排除して出現順に並べる", () => {
+  const entries = [
+    { target: "a.dng", reason: "failed", detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用" },
+    { target: "b.dng", reason: "failed", detail: "Capture One got an error: -10004" },
+    { target: "c.dng", reason: "failed", detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用" },
+  ];
+  // 肝: 重複排除を外すと 3 行になり、並びを反転すると 2 行の順序が入れ替わって FAIL する(変異検出)。
+  assert.equal(
+    M.formatFailureDetails(entries),
+    "失敗の内容:\n" +
+      "  メニュー項目が有効化されない: 調整 > マッチルックを適用\n" +
+      "  Capture One got an error: -10004",
+  );
+});
+
+test("formatFailureDetails: detail を持たない entry が混ざっても failed の detail だけを出す", () => {
+  const entries = [
+    { target: "a.dng", reason: "nojpeg", detail: null },
+    { target: "b.dng", reason: "failed", detail: "プレビューが生成されていません" },
+  ];
+  assert.equal(M.formatFailureDetails(entries), "失敗の内容:\n  プレビューが生成されていません");
 });
 
 test("noneAppliedMessage: 件数・対象・注意書き・summary を含む(failed 混在で再実行行も出る)", () => {
