@@ -580,37 +580,16 @@ function candidateEntries(candidates: CollectionCandidate[]): { label: string; c
 // 実際に作業可能であることを確認する。current collection 外の variant は C1 が select を
 // 拒否するので、成否がそのまま「切替先が対象を含むか」の判定になる。名前照合を撤去しても
 // 黙って誤ったコレクションで処理を続ける状態には落とさない。
+//
+// 候補の列挙(ゴミ箱の除外・id / name の読み取り・件数取得)は collectCollectionCandidates が
+// 持つ。ここは選定・切替・切替後の妥当性確認だけを行う。候補は添字を揃えた並行配列ではなく
+// レコード 1 本で持ち、id と名前と件数が別々の配列へずれて入る余地を無くしている。
 function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   const doc = C1.currentDocument;
-  const cols = doc.collections();
-  const candidates: any[] = [];
-  const ids: string[] = [];
-  const entries: { label: string; count: number }[] = [];
-  const counts: number[] = [];
-  for (let i = 0; i < cols.length; i++) {
-    let id = "";
-    let name = "?";
-    try {
-      id = String(cols[i].id());
-      name = String(cols[i].name());
-    } catch (e) {
-      /* 読めなくても候補には残す(件数側で弾く) */
-    }
-    // ゴミ箱は言語非依存の id で除外する。大量カリング後は全画像より大きくなりうるため。
-    if (id === "trash") continue;
-    let n = -1;
-    try {
-      n = cols[i].variants().length;
-    } catch (e) {
-      /* 件数を取れないものは -1(候補外の番兵) */
-    }
-    candidates.push(cols[i]);
-    ids.push(id);
-    entries.push({ label: name, count: n });
-    counts.push(n);
-  }
+  const candidates = collectCollectionCandidates(C1);
+  const entries = candidateEntries(candidates);
 
-  const pick = pickLargestIndex(counts);
+  const pick = pickLargestIndex(candidates.map((c) => c.count));
   if (pick < 0) {
     throw new Error("切替先のコレクションを決められません。候補: " + describeCounts(entries));
   }
@@ -623,9 +602,9 @@ function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   } catch (e) {
     /* 取れなければ切替を行う(安全側) */
   }
-  if (currentId && currentId === ids[pick]) return;
+  if (currentId && currentId === candidates[pick].id) return;
 
-  doc.currentCollection = candidates[pick];
+  doc.currentCollection = candidates[pick].collection;
   delay(0.5); // 切替の反映待ち。plain delay を使う(run loop を pump しない)
 
   // 安全弁: 対象が本当にこのコレクションに居ることを確認する。
@@ -634,7 +613,7 @@ function ensureWorkingCollection(C1: any, items: WorkItem[]): void {
   } catch (e) {
     throw new Error(
       "切替先コレクション「" +
-        entries[pick].label +
+        candidates[pick].name +
         "」で対象を選択できません(" +
         String(e) +
         ")。候補: " +
