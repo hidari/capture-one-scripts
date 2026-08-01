@@ -18,12 +18,19 @@ type ManifestRow = {
   matchlook: MatchLookStatus;
 };
 
+// 適用ループ 1 件ぶんの結果。row はそのまま追記ログの行になり、detail は適用に失敗したときの
+// 例外 message を保持する。TSV のスキーマを変えずに失敗理由を通知へ運ぶための構造で、
+// 並行配列を持たずに row と detail の対応を型で保つ。
+type ApplyOutcome = { row: ManifestRow; detail: string | null };
+
 // Match Look を適用できなかった理由。matchlook 値からの写像は MATCHLOOK_REASON が持つ。
 // 表示文言はここに持たず NOT_APPLIED_LABEL が持つ(判定値と表示文言を混ぜない)。
 type NotAppliedReason = "nojpeg" | "failed";
 
-// 未適用 1 件の正規化単位。target は対象の原名。
-type NotAppliedEntry = { target: string; reason: NotAppliedReason };
+// 未適用 1 件の正規化単位。target は対象の原名。detail は適用に失敗したときの例外 message を
+// verbatim で持つ(参照 JPEG が引けなかった場合は例外を伴わないので null)。detail は通知の
+// 組み立てにだけ使い、追記ログの TSV へは出さない(既存ファイルの列数と食い違わせないため)。
+type NotAppliedEntry = { target: string; reason: NotAppliedReason; detail: string | null };
 
 // バッチ全体の帰結。none-applied は throw、partial はダイアログ、ok は無通知。
 type Outcome = "none-applied" | "partial" | "ok";
@@ -1043,15 +1050,14 @@ function tallyMatchlook(rows: ManifestRow[]): MatchLookTally {
   return tally;
 }
 
-// 追記ログの行から未適用のものだけを出現順に抜き出す(pure)。matchlook の値がそのまま
-// 理由になるので、集計とは別に数え直さない(rows が唯一の真実)。理由への写像は
-// matchLookReason に閉じ、null(=適用済み)をそのまま除外条件に使う。
-function notAppliedEntries(rows: ManifestRow[]): NotAppliedEntry[] {
+// 適用結果から未適用のものだけを出現順に抜き出す(pure)。matchlook の値がそのまま理由になるので
+// 集計とは別に数え直さない(outcomes が唯一の真実)。理由への写像は matchLookReason に閉じる。
+function notAppliedEntries(outcomes: ApplyOutcome[]): NotAppliedEntry[] {
   const out: NotAppliedEntry[] = [];
-  for (const r of rows) {
-    const reason = matchLookReason(r.matchlook);
+  for (const o of outcomes) {
+    const reason = matchLookReason(o.row.matchlook);
     if (reason === null) continue;
-    out.push({ target: r.target, reason: reason });
+    out.push({ target: o.row.target, reason: reason, detail: o.detail });
   }
   return out;
 }
@@ -1165,17 +1171,17 @@ function showNotAppliedAlert(text: string): void {
 // 複数枚適用の 2 枚目以降が着地しない)。
 function finishRun(
   summary: string,
-  rows: ManifestRow[],
+  outcomes: ApplyOutcome[],
   manifestError: string | null,
   notify: (text: string) => void,
 ): string {
-  const notApplied = notAppliedEntries(rows);
-  const outcome = classifyOutcome(rows.length, notApplied.length);
+  const notApplied = notAppliedEntries(outcomes);
+  const outcome = classifyOutcome(outcomes.length, notApplied.length);
   if (outcome === "none-applied") {
     throw new Error(withManifestFailure(noneAppliedMessage(summary, notApplied), manifestError));
   }
   if (outcome === "partial") {
-    notify(notAppliedAlertText(rows.length - notApplied.length, notApplied));
+    notify(notAppliedAlertText(outcomes.length - notApplied.length, notApplied));
   }
   // 通知を出し終えてから投げる。summary を先頭に載せるので、ログ保存に失敗しても
   // 「写真に何を適用したか」は失われない。
@@ -1215,7 +1221,7 @@ function run(): string {
   } catch (e) {
     /* 取れなければ復帰しない */
   }
-  const rows: ManifestRow[] = [];
+  const outcomes: ApplyOutcome[] = [];
   // 判定は finally の後で行うため summary を try の外へ持ち出す(NSAlert は run loop を回すので
   // HUD を閉じコレクションを戻してから呼ぶ。throw も復帰後に投げる)。
   let summary = "";
@@ -1258,6 +1264,7 @@ function run(): string {
       hudSetItem(hud, done, items.length, it.label);
       let jpegLabel: string | null = null;
       let matchlook: MatchLookStatus = "-";
+      let detail: string | null = null; // 適用に失敗したときだけ例外 message を持つ
       try {
         // JPEG variant は対象と同じ baseName で引く(同名 import 前提)。
         const jv = findVariantInIndex(variantIndex, it.baseName, CONFIG.jpegExts);
@@ -1270,10 +1277,15 @@ function run(): string {
         // JPEG が見つからなければ matchlook は初期値 "-" のまま(集計時に nojpeg 扱い)。
       } catch (e) {
         matchlook = "no-ref";
+        // 失敗理由は未適用通知にだけ載せる(追記ログの TSV スキーマは変えない)。
+        detail = errorMessage(e);
       }
       hudItemDone(hud, done); // applied/スキップを問わずバーを done へ確定前進
-      rows.push({ target: it.label, jpeg: jpegLabel, matchlook: matchlook });
+      outcomes.push({ row: { target: it.label, jpeg: jpegLabel, matchlook: matchlook }, detail: detail });
     }
+
+    // 追記ログと集計は行だけを見る(detail は TSV へ出さない)。
+    const rows = outcomes.map((o) => o.row);
 
     // カウンタは rows(唯一の真実)から導出する。ループ中に別変数で数えると乖離しうる。
     // 状態ごとの排他集計は tallyMatchlook に閉じる(キーの過不足は Record が型で捕まえる)。
@@ -1303,5 +1315,5 @@ function run(): string {
   // finishRun をここより前(try / finally の中)へ移さないこと: NSAlert が run loop を回すため、
   // 適用シーケンスと交錯すると複数枚適用の 2 枚目以降が着地しなくなる。
   // 追記ログの書き込みは finally より前に済ませてあり、失敗していれば manifestError に入っている。
-  return finishRun(summary, rows, manifestError, showNotAppliedAlert);
+  return finishRun(summary, outcomes, manifestError, showNotAppliedAlert);
 }
