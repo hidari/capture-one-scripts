@@ -20,6 +20,7 @@ function loadModule(extraSandbox = {}, extraExposed = []) {
     "buildIndexFromBulk", "buildVariantIndex", "findVariantInIndex", "manifestHeaderLines", "manifestRowLine",
     "manifestContent", "formatSummary", "progressLabel", "phaseLabel", "phaseBarValue", "CONFIG",
     "findMenuCommand", "pickLargestIndex", "describeCounts", "ensureWorkingCollection",
+    "readMenuTree", "classifyMenuAccessError", "errorNumberOf", "menuAccessFailureMessage",
     "normalizeBulkStrings", "collectCollectionCandidates", "candidateEntries",
     "readCollectionContents", "coverageOf", "pickBestCandidateIndex", "collectionSwitchVerdict",
     "classifyOutcome", "notAppliedEntries",
@@ -407,6 +408,81 @@ test("findMenuCommand: 不一致は null(部分一致で誤ヒットしない)",
   assert.equal(M.findMenuCommand(tree, ["Apply Match Look"]), null);
   assert.equal(M.findMenuCommand([], ["Apply Match Look"]), null);
   assert.equal(M.findMenuCommand([{ menu: "Adjustments", items: [] }], ["Apply Match Look"]), null);
+});
+
+// menuAccessFailureMessage の期待値ビルダ。種別ごとに変わるのは 1 文目(状況説明)だけで、
+// 権限が第一候補である旨・README への参照・生の errorNumber と message は共通、という
+// 文面の構造そのものを pin する(共通部を種別ごとに 4 回書かない)。appName を引数で受けるのは、
+// 文面へアプリ名をリテラルで焼き込む変異(CONFIG.c1AppName を唯一の真実とする規約を壊す変異)を
+// 期待値側でも素通しさせないため。ビルダが appName を固定すると実装の焼き込みと打ち消し合う。
+function expectedMenuAccessMessage(appName, situation, errorNumber, rawMessage) {
+  return (
+    appName + " " + situation +
+    "Match Look はメニュー操作でしか実行できないため中止しました。\n" +
+    appName + " への辞書スクリプティングは成功しているため、アクセシビリティと" +
+    "システムイベントへのオートメーションの権限が第一候補です。\n" +
+    "復旧手順は README の Troubleshooting を参照してください。\n" +
+    "errorNumber=" + errorNumber + " message=" + rawMessage
+  );
+}
+
+test("classifyMenuAccessError: errorNumber だけで種別を決める", () => {
+  // 数値と種別の対応は実装が唯一の真実。ここはその対応を外から固定する pin。
+  assert.equal(M.classifyMenuAccessError(-1728), "app-not-found");
+  assert.equal(M.classifyMenuAccessError(-1719), "no-menu-bar");
+  // 未知の値と null(errorNumber を取れない例外)は unknown へ寄せる。
+  assert.equal(M.classifyMenuAccessError(-25211), "unknown");
+  assert.equal(M.classifyMenuAccessError(0), "unknown");
+  assert.equal(M.classifyMenuAccessError(null), "unknown");
+});
+
+test("errorNumberOf: 数値の errorNumber だけを取り出す(それ以外は null)", () => {
+  assert.equal(M.errorNumberOf(Object.assign(new Error("boom"), { errorNumber: -1728 })), -1728);
+  // 肝: typeof ガードを外すと文字列がそのまま流れ、classifyMenuAccessError の === 比較が
+  // 常に外れて全て unknown へ落ちる。null を要求することでガードを pin する(変異検出)。
+  assert.equal(M.errorNumberOf(Object.assign(new Error("boom"), { errorNumber: "-1728" })), null);
+  assert.equal(M.errorNumberOf(new Error("boom")), null);
+  assert.equal(M.errorNumberOf(null), null);
+  assert.equal(M.errorNumberOf(undefined), null);
+  assert.equal(M.errorNumberOf("boom"), null);
+});
+
+test("menuAccessFailureMessage: 種別ごとに 1 文目が変わり共通の診断行が続く", () => {
+  assert.equal(
+    M.menuAccessFailureMessage("app-not-found", "Capture One", -1728, "Error: boom"),
+    expectedMenuAccessMessage("Capture One", "のプロセスが System Events から見つかりません。", "-1728", "Error: boom"),
+  );
+  assert.equal(
+    M.menuAccessFailureMessage("no-menu-bar", "Capture One", -1719, "Error: illegal index"),
+    expectedMenuAccessMessage("Capture One", "のメニューバーを取得できません。", "-1719", "Error: illegal index"),
+  );
+  // errorNumber が取れない場合も verbatim で null と分かる形で残す(欄ごと消さない)。
+  assert.equal(
+    M.menuAccessFailureMessage("unknown", "Capture One", null, "Error: ?"),
+    expectedMenuAccessMessage("Capture One", "のメニューバーを読み取れません。", "null", "Error: ?"),
+  );
+});
+
+test("menuAccessFailureMessage: appName を 2 箇所とも引数から取る(CONFIG.c1AppName が唯一の真実)", () => {
+  // 肝: 実装が文面へ "Capture One" をリテラルで焼き込むと、既定名しか渡さないテストでは
+  // 検出できない。既定名と違うアプリ名を渡し、1 文目と 2 文目の両方が差し替わることを exact で pin する。
+  const msg = M.menuAccessFailureMessage("app-not-found", "Capture One 17", -1728, "Error: boom");
+  assert.equal(
+    msg,
+    expectedMenuAccessMessage("Capture One 17", "のプロセスが System Events から見つかりません。", "-1728", "Error: boom"),
+  );
+  // negative 対照: 焼き込み変異が入ると下の 2 つが一致してしまう(引数が無視されている証拠)。
+  assert.notEqual(msg, M.menuAccessFailureMessage("app-not-found", "Capture One", -1728, "Error: boom"));
+  // 片側だけ焼き込む変異も落とす。差し替え後のアプリ名は文面に 2 回現れる。
+  assert.equal(msg.split("Capture One 17").length - 1, 2);
+});
+
+test("menuAccessFailureMessage: 復旧手順は再掲せず README を参照する", () => {
+  const msg = M.menuAccessFailureMessage("app-not-found", "Capture One", -1728, "Error: boom");
+  // 手順は README と CLAUDE.md の 2 箇所にある。コンパイル済み成果物へ 3 つ目の写しを作らない。
+  assert.ok(msg.indexOf("tccutil") < 0);
+  assert.ok(msg.indexOf("システム設定") < 0);
+  assert.ok(msg.indexOf("README の Troubleshooting") >= 0);
 });
 
 test("pickLargestIndex: 最大値の添字 / 同値は先勝ち", () => {

@@ -348,6 +348,56 @@ function findMenuCommand(tree: MenuTree, candidates: string[]): MenuCommand | nu
   return null;
 }
 
+// メニューバーを読めなかったときの失敗種別。分岐は errorNumber だけで行う。例外の message は
+// システム言語でローカライズされるため、文字列で分岐すると UI 言語に依存する(メニュー項目を
+// 全言語の候補表で引くのと同じ理由で、ここも表示言語に依存させない)。
+type MenuAccessFailure = "app-not-found" | "no-menu-bar" | "unknown";
+
+// errorNumber から失敗種別を決める(pure)。errorNumber と種別の対応はこの実装が唯一の真実で、
+// 数値をコメントや散文へ再掲しない。未知の値は unknown へ寄せ、生の値は文面末尾に載せる。
+function classifyMenuAccessError(errorNumber: number | null): MenuAccessFailure {
+  if (errorNumber === -1728) return "app-not-found";
+  if (errorNumber === -1719) return "no-menu-bar";
+  return "unknown";
+}
+
+// 例外から errorNumber を取り出す(pure)。Apple Event の例外は errorNumber を載せるが、
+// 経路によっては載らない/数値でないことがあるため、数値でなければ null にする。
+function errorNumberOf(e: any): number | null {
+  const n = e == null ? null : e.errorNumber;
+  return typeof n === "number" ? n : null;
+}
+
+// 失敗種別ごとの状況説明(文面の 1 文目)。Record にしておくと種別が増えたときキー不足が
+// コンパイルエラーになる(NOT_APPLIED_GUIDANCE と同じパターン)。appName は呼び出し側が前置する。
+const MENU_ACCESS_SITUATION: Record<MenuAccessFailure, string> = {
+  "app-not-found": "のプロセスが System Events から見つかりません。",
+  "no-menu-bar": "のメニューバーを取得できません。",
+  unknown: "のメニューバーを読み取れません。",
+};
+
+// メニューバーを読めなかったときの診断文面(pure)。readMenuTree が呼ばれる時点で Capture One への
+// 辞書スクリプティングは既に成功しているため(セッションルート検出と選択取得)、アプリが起動して
+// いない可能性は事実上無く、権限を第一候補として書く。復旧手順は README の Troubleshooting に
+// あるのでここへ再掲しない(コンパイル済み成果物に 3 つ目の写しを作らない)。生の errorNumber と
+// message は未知の値でも診断できるよう verbatim で末尾に置く。アプリ名は必ず引数で受けた appName を
+// 使い、文面へリテラルで焼き込まない(CONFIG.c1AppName が唯一の真実)。
+function menuAccessFailureMessage(
+  kind: MenuAccessFailure,
+  appName: string,
+  errorNumber: number | null,
+  rawMessage: string,
+): string {
+  return (
+    appName + " " + MENU_ACCESS_SITUATION[kind] +
+    "Match Look はメニュー操作でしか実行できないため中止しました。\n" +
+    appName + " への辞書スクリプティングは成功しているため、アクセシビリティと" +
+    "システムイベントへのオートメーションの権限が第一候補です。\n" +
+    "復旧手順は README の Troubleshooting を参照してください。\n" +
+    "errorNumber=" + String(errorNumber) + " message=" + rawMessage
+  );
+}
+
 // メニューバーの構造を一括取得する。複数形アクセスで 1 メニューあたり 1 イベントに抑える
 // (実機で全 13 メニューの全項目名が 229ms。1 項目ずつ引くと 1 メニューだけで 451ms かかる)。
 function readMenuTree(SE: any): MenuTree {
