@@ -401,8 +401,20 @@ function menuAccessFailureMessage(
 // メニューバーの構造を一括取得する。複数形アクセスで 1 メニューあたり 1 イベントに抑える
 // (実機で全 13 メニューの全項目名が 229ms。1 項目ずつ引くと 1 メニューだけで 451ms かかる)。
 function readMenuTree(SE: any): MenuTree {
+  // ここまでは遅延指定子で Apple Event を発行しないため throw しない。
   const bar = SE.processes.byName(CONFIG.c1AppName).menuBars[0];
-  const names = bar.menuBarItems.name() as string[];
+  let names: string[] = [];
+  try {
+    // 最初に Apple Event が飛ぶ行。権限違反はここに現れる。
+    names = bar.menuBarItems.name() as string[];
+  } catch (e) {
+    // 生の AX エラーをそのまま見せない。ここで落ちるとメニューは 1 つも読めておらず
+    // resolveMatchLookMenu の診断(メニュー構成の一覧)へ到達できないため、この場で分類する。
+    const num = errorNumberOf(e);
+    throw new Error(
+      menuAccessFailureMessage(classifyMenuAccessError(num), CONFIG.c1AppName, num, String(e)),
+    );
+  }
   const tree: MenuTree = [];
   for (let i = 0; i < names.length; i++) {
     let items: (string | null)[] = [];
@@ -427,8 +439,8 @@ function resolveMatchLookMenu(SE: any): { setReference: MenuCommand; apply: Menu
   if (!setRef) missing.push("set-reference");
   if (!apply) missing.push("apply");
   // 件数 0 は「その特定のメニューの項目だけが読めなかった」(readMenuTree の per-メニュー catch で
-  // 吸収された)ことを表す。Accessibility 権限が無い等の全体障害は readMenuTree 冒頭の
-  // menuBars[0] / menuBarItems.name() 読み取りで無条件 throw して先に落ちるため、ここには到達しない
+  // 吸収された)ことを表す。メニューバー全体を読めない障害(権限違反など)は readMenuTree の
+  // menuBarItems.name() が menuAccessFailureMessage の診断へ包んで throw するため、ここには到達しない
   // (件数 0 がそのまま権限失敗を意味するわけではない)。件数はあるのに不一致なら「ラベルが候補に無い」。
   throw new Error(
     "Match Look のメニュー項目が見つかりません(" +

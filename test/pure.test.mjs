@@ -485,6 +485,94 @@ test("menuAccessFailureMessage: 復旧手順は再掲せず README を参照す�
   assert.ok(msg.indexOf("README の Troubleshooting") >= 0);
 });
 
+// System Events の最小 fake。JXA の specifier は「呼び出せるうえに添字アクセスも持つ」形なので、
+// menuBarItems にも name()(一括読み)と [i](個別アクセス)の両方を持たせる。
+// menus の要素は { menu, items }。items が null のメニューは項目読み取りが throw する
+// (実機で一部メニューだけ読めない状況の再現)。nameError を渡すと menuBarItems.name() が throw する。
+function fakeSystemEvents(menus, nameError) {
+  const menuBarItems = {};
+  menus.forEach((m, i) => {
+    menuBarItems[i] = {
+      menus: [
+        {
+          menuItems: {
+            name: () => {
+              if (m.items === null) throw new Error("項目を読めない");
+              return m.items;
+            },
+          },
+        },
+      ],
+    };
+  });
+  menuBarItems.name = () => {
+    if (nameError) throw nameError;
+    return menus.map((m) => m.menu);
+  };
+  return { processes: { byName: () => ({ menuBars: [{ menuBarItems }] }) } };
+}
+
+test("readMenuTree: メニュー名と項目名からツリーを組む(セパレータの null も残す)", () => {
+  // 2 メニューにしてあるのは添字の取り違えを検出するため。1 メニューだと names[i] を names[0] へ、
+  // menuBarItems[i] を menuBarItems[0] へ壊しても同じ結果になり pin が死ぬ。
+  const SE = fakeSystemEvents([
+    { menu: "File", items: ["Open…"] },
+    { menu: "Adjustments", items: ["Reset", null, "Apply Match Look"] },
+  ]);
+  const tree = M.readMenuTree(SE);
+  // 戻り値は vm realm の配列なので、外側は添字で検証し、内側は Array.from で main realm へ写す
+  // (プロトタイプ不一致で deepEqual が落ちるのを避ける。cross-realm の扱いは notes 4)。
+  assert.equal(tree.length, 2);
+  assert.equal(tree[0].menu, "File");
+  assert.deepEqual(Array.from(tree[0].items), ["Open…"]);
+  assert.equal(tree[1].menu, "Adjustments");
+  assert.deepEqual(Array.from(tree[1].items), ["Reset", null, "Apply Match Look"]);
+});
+
+test("readMenuTree: 項目を取れないメニューは空のまま続行する(全体を止めない)", () => {
+  // 肝: per-メニューの try/catch を外すとここで throw して FAIL する(変異検出)。
+  const SE = fakeSystemEvents([
+    { menu: "File", items: null },
+    { menu: "Adjustments", items: ["Apply Match Look"] },
+  ]);
+  const tree = M.readMenuTree(SE);
+  assert.equal(tree.length, 2);
+  assert.equal(tree[0].menu, "File");
+  assert.deepEqual(Array.from(tree[0].items), []);
+  assert.deepEqual(Array.from(tree[1].items), ["Apply Match Look"]);
+});
+
+test("readMenuTree: menuBarItems.name() の失敗を権限診断へ包む(生の AX エラーを出さない)", () => {
+  const boom = Object.assign(new Error("boom"), { errorNumber: -1728 });
+  const SE = fakeSystemEvents([], boom);
+  assert.throws(
+    () => M.readMenuTree(SE),
+    (err) => {
+      // 配線 pin: 分類 / appName / errorNumber / 生 message の 4 つが正しく渡ること。
+      // 文面そのものは menuAccessFailureMessage 側のテストが exact で pin している。
+      assert.equal(
+        err.message,
+        M.menuAccessFailureMessage("app-not-found", M.CONFIG.c1AppName, -1728, "Error: boom"),
+      );
+      return true;
+    },
+  );
+});
+
+test("readMenuTree: errorNumber を持たない失敗も unknown として包む", () => {
+  const SE = fakeSystemEvents([], new Error("no number"));
+  assert.throws(
+    () => M.readMenuTree(SE),
+    (err) => {
+      assert.equal(
+        err.message,
+        M.menuAccessFailureMessage("unknown", M.CONFIG.c1AppName, null, "Error: no number"),
+      );
+      return true;
+    },
+  );
+});
+
 test("pickLargestIndex: 最大値の添字 / 同値は先勝ち", () => {
   assert.equal(M.pickLargestIndex([3, 7, 5]), 1);
   // 肝: 比較を > から >= へ緩めると後勝ちになりここが 2 を返して FAIL する(変異検出)。
