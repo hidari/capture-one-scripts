@@ -909,6 +909,23 @@ function appendManifest(sessionRoot: string, stamp: string, rows: ManifestRow[])
   writeTextFile(dest, manifestContent(existing, manifestHeaderLines(sessionRoot), body));
 }
 
+// manifest を書き、失敗しても throw せず例外の内容を文字列で返す(成功は null)。
+// ここで投げないのは、投げると finally を抜けて run() の外へ出てしまい、その後ろにある
+// 帰結判定(全件未適用の throw / 部分未適用のダイアログ)へ到達しなくなるため。
+// 呼び出し側が戻り値を保持し、帰結を伝えた後に finishRun が投げる。
+function appendManifestOrError(
+  sessionRoot: string,
+  stamp: string,
+  rows: ManifestRow[],
+): string | null {
+  try {
+    appendManifest(sessionRoot, stamp, rows);
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
 // run() の結果 summary(1 行)。早期 return(対象 0 件)と本処理の両方で使い、出力スキーマの
 // 二重管理を避ける(フィールドの追加/改名はここ 1 箇所で済む)。
 function formatSummary(items: number, applied: number, noRef: number, noJpeg: number): string {
@@ -1045,6 +1062,14 @@ function notAppliedAlertText(applied: number, entries: NotAppliedEntry[]): strin
   );
 }
 
+// manifest 書き込み失敗を既存の文面の末尾へ 1 行足す(pure)。detail が null なら base を
+// そのまま返す。全件未適用の throw 文面とログ失敗単独の throw 文面の双方でこれを使い、
+// 「何を適用したか」を先に載せてから失敗を足す並びを二重管理しない。
+function withManifestFailure(base: string, detail: string | null): string {
+  if (detail === null) return base;
+  return base + "\nmanifest 書き込み失敗: " + detail;
+}
+
 // 部分未適用をダイアログで知らせる。runModal は run loop を回すため、必ず適用ループと HUD の
 // クローズが終わってから呼ぶこと(適用中に run loop を pump すると複数枚適用が壊れる)。
 // 表示に失敗しても握りつぶす(通知は装飾。summary の return を妨げない)。
@@ -1059,6 +1084,35 @@ function showNotAppliedAlert(text: string): void {
   } catch (e) {
     /* 通知できなくても処理結果は summary と追記ログに残る */
   }
+}
+
+// finally 通過後(コレクション復帰済み・HUD クローズ済み)の帰結処理。未適用の帰結を先に
+// 伝え、保持した manifest 例外は最後に投げる。この順序は逆にしないこと: manifest の失敗を
+// 先に投げると「何が適用できなかったか」がユーザーへ届かない(read-only な Output や
+// 壊れた既存ファイルでは毎回この経路を通る)。
+// notify を注入するのは、既定の実装 showNotAppliedAlert が NSAlert で run loop を回すため。
+// この関数は必ず run() の finally より後で呼ぶこと(適用シーケンス中に run loop を回すと
+// 複数枚適用の 2 枚目以降が着地しない)。
+function finishRun(
+  summary: string,
+  rows: ManifestRow[],
+  manifestError: string | null,
+  notify: (text: string) => void,
+): string {
+  const notApplied = notAppliedEntries(rows);
+  const outcome = classifyOutcome(rows.length, notApplied.length);
+  if (outcome === "none-applied") {
+    throw new Error(withManifestFailure(noneAppliedMessage(summary, notApplied), manifestError));
+  }
+  if (outcome === "partial") {
+    notify(notAppliedAlertText(rows.length - notApplied.length, notApplied));
+  }
+  // 通知を出し終えてから投げる。summary を先頭に載せるので、ログ保存に失敗しても
+  // 「写真に何を適用したか」は失われない。
+  if (manifestError !== null) {
+    throw new Error(withManifestFailure(summary, manifestError));
+  }
+  return summary;
 }
 
 // ================= メイン =================
@@ -1095,6 +1149,9 @@ function run(): string {
   // 判定は finally の後で行うため summary を try の外へ持ち出す(NSAlert は run loop を回すので
   // HUD を閉じコレクションを戻してから呼ぶ。throw も復帰後に投げる)。
   let summary = "";
+  // manifest 書き込みの失敗もここに保持し、finally 通過後の帰結判定より後に投げる
+  // (try の中で投げると未適用の通知へ到達しない)。
+  let manifestError: string | null = null;
 
   // コレクション切替と本処理を try で囲む。createProgressHUD の後に throw しうる文を
   // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
@@ -1156,11 +1213,8 @@ function run(): string {
     // 組み立て、ログ保存が失敗しても summary を載せて throw する。fail-loud は保ちつつ、
     // 「ユーザーの写真に何をしたか」だけは必ず伝える(黙って applied=N を返して失敗を隠さない)。
     summary = formatSummary(items.length, tally.applied, tally["no-ref"], tally["-"]);
-    try {
-      appendManifest(root, stamp, rows);
-    } catch (e) {
-      throw new Error(summary + " / manifest 書き込み失敗: " + String(e));
-    }
+    // 失敗はここで投げず保持する(投げると finally を抜けて未適用の通知へ到達しない)。
+    manifestError = appendManifestOrError(root, stamp, rows);
   } finally {
     // ビューを元のコレクションへ戻す(return / throw いずれでも finally で必ず実行する)。
     if (originalCollection) {
@@ -1176,14 +1230,8 @@ function run(): string {
 
   // ここから先は finally 通過後(コレクション復帰済み・HUD クローズ済み)。適用の Apple Event は
   // すべて完了しているので、run loop を回す NSAlert を出しても適用シーケンスと交錯しない。
-  // 追記ログは finally より前に書き終えているため、throw する経路でも記録は残る。
-  const notApplied = notAppliedEntries(rows);
-  const outcome = classifyOutcome(rows.length, notApplied.length);
-  if (outcome === "none-applied") {
-    throw new Error(noneAppliedMessage(summary, notApplied));
-  }
-  if (outcome === "partial") {
-    showNotAppliedAlert(notAppliedAlertText(rows.length - notApplied.length, notApplied));
-  }
-  return summary;
+  // finishRun をここより前(try / finally の中)へ移さないこと: NSAlert が run loop を回すため、
+  // 適用シーケンスと交錯すると複数枚適用の 2 枚目以降が着地しなくなる。
+  // 追記ログの書き込みは finally より前に済ませてあり、失敗していれば manifestError に入っている。
+  return finishRun(summary, rows, manifestError, showNotAppliedAlert);
 }
