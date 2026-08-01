@@ -414,6 +414,16 @@ function clickMenuItem(SE: any, cmd: MenuCommand): void {
 }
 
 // 現在の選択を一旦すべて解除し、target だけを選択する。
+//
+// 警告: この関数へ run loop を回す処理(NSRunLoop.runUntilDate を使う sleep / pump 系)を
+// 足さないこと。selectOnly は Match Look の適用シーケンスから呼ばれる適用パスであり、
+// ここの待機を run loop pump に変えると複数枚適用の 2 枚目以降が着地しない
+// (CLAUDE.md Known Limitations 11。実機で root cause 確定済みの regression)。
+// 待機は JXA 組込みの plain delay のままにする。
+//
+// なお ensureWorkingCollection の安全弁にある選択解除 2 行はここと逐語的に重複しているが、
+// 共通化のためにこの関数へ触ると複数枚での live smoke をやり直すことになるため、重複は
+// 意図的に残している(挙動不変の 2 行削減に実機コストを払うのは見合わない)。
 function selectOnly(doc: any, variant: C1Variant): void {
   const selected = doc.variants.whose({ selected: true })();
   if (selected.length) doc.deselect({ variants: selected });
