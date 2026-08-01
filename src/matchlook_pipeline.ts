@@ -675,6 +675,17 @@ function candidateEntries(candidates: CollectionCandidate[]): { label: string; c
   return candidates.map((c) => ({ label: c.name, count: c.count }));
 }
 
+// コレクション切替の判定(pure)。expectedId は選定した切替先の id、actualId は
+// doc.currentCollection() から読んだ id。どちらかが空文字なら判定不能(id を読めなかった)。
+// 早期 return(既に切替先を見ている)の判定と、切替後の着地検証で同じ 1 本を読む。
+// 同じ判定規則を 2 本の関数へ分けると片方だけ緩む drift が起きるため統合してある。
+type SwitchVerdict = "ok" | "mismatch" | "unverified";
+
+function collectionSwitchVerdict(expectedId: string, actualId: string): SwitchVerdict {
+  if (!expectedId || !actualId) return "unverified";
+  return expectedId === actualId ? "ok" : "mismatch";
+}
+
 // 対象と JPEG を同一コレクションに揃える。variants() は current collection スコープなので、
 // 対象のコレクションだけをブラウズ中だと JPEG が載らず Match Look の参照を引けない。
 //
