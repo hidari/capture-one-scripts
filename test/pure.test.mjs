@@ -239,15 +239,16 @@ test("phaseBarValue: フェーズ開始時のバー値(half-item)", () => {
   assert.equal(M.phaseBarValue(3, "apply"), 2.5);
 });
 
-// findMenuCommand は vm コンテキスト側で新規オブジェクトを生成して返す。vm は別 realm なので
-// その Object.prototype はテスト側(main realm)のものと一致せず、node:assert/strict の
-// deepEqual(= deepStrictEqual)はプロトタイプ不一致で構造が同じでも FAIL する
-// ("same structure but are not reference-equal")。戻り値をスプレッドで main realm の
-// プレーンオブジェクトへ写してから比較し、この realm 差を吸収する(値の比較自体は緩めない)。
-// 回避策を 1 箇所に閉じ込めるため以下のヘルパ経由で比較する。null 回帰は `{ ...null }` が `{}` に
-// なり期待値と構造が食い違うので引き続き捕捉できる(assertion は弱まらない)。
-function assertMenuCommand(actual, expected) {
-  assert.deepEqual({ ...actual }, expected);
+// vm コンテキスト側で生成された値は main realm と Object.prototype が一致せず、
+// node:assert/strict の deepEqual(= deepStrictEqual)は構造が同じでも FAIL する
+// ("same structure but are not reference-equal")。配列は main realm の Array.from で写し、
+// オブジェクトはスプレッドでプレーンオブジェクト化してから比較して、この realm 差だけを
+// 吸収する(値の比較自体は緩めない)。Array.isArray は realm をまたいでも正しく判定する。
+// null / 文字列などの非オブジェクトはそのまま渡すので、期待値がオブジェクトなら FAIL する
+// (null 回帰は引き続き捕捉できる)。vm 由来の戻り値の比較は必ずこの 1 本を通す。
+function assertPlainEqual(actual, expected) {
+  const plain = (v) => (v !== null && typeof v === "object" ? { ...v } : v);
+  assert.deepEqual(Array.isArray(actual) ? Array.from(actual, plain) : plain(actual), expected);
 }
 
 test("findMenuCommand: 英語ラベルで解決する", () => {
@@ -255,7 +256,7 @@ test("findMenuCommand: 英語ラベルで解決する", () => {
     { menu: "File", items: ["New Session…", "Open…"] },
     { menu: "Adjustments", items: ["Reset", null, "Set Match Look Reference", "Apply Match Look"] },
   ];
-  assertMenuCommand(M.findMenuCommand(tree, ["Set Match Look Reference", "セットマッチルックリファレンス"]), {
+  assertPlainEqual(M.findMenuCommand(tree, ["Set Match Look Reference", "セットマッチルックリファレンス"]), {
     menu: "Adjustments",
     item: "Set Match Look Reference",
   });
@@ -266,7 +267,7 @@ test("findMenuCommand: 同一の候補配列から日本語ラベルも解決す
   const tree = [
     { menu: "調整", items: ["リセット", null, "セットマッチルックリファレンス", "マッチルックを適用"] },
   ];
-  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look", "マッチルックを適用"]), {
+  assertPlainEqual(M.findMenuCommand(tree, ["Apply Match Look", "マッチルックを適用"]), {
     menu: "調整",
     item: "マッチルックを適用",
   });
@@ -279,7 +280,7 @@ test("findMenuCommand: 先頭以外のメニューにある項目も見つける
     { menu: "Edit", items: ["Undo"] },
     { menu: "Adjustments", items: ["Apply Match Look"] },
   ];
-  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look"]), {
+  assertPlainEqual(M.findMenuCommand(tree, ["Apply Match Look"]), {
     menu: "Adjustments",
     item: "Apply Match Look",
   });
@@ -290,7 +291,7 @@ test("findMenuCommand: セパレータ(null)を挟んでも走査を続け後ろ
   // なお「typeof ガードを外す」変異では赤くならない(candidates.indexOf(null) は -1 で自然に不一致)。
   // pin しているのはガードの有無ではなく走査の継続である。
   const tree = [{ menu: "Adjustments", items: [null, "Reset", null, "Apply Match Look"] }];
-  assertMenuCommand(M.findMenuCommand(tree, ["Apply Match Look"]), {
+  assertPlainEqual(M.findMenuCommand(tree, ["Apply Match Look"]), {
     menu: "Adjustments",
     item: "Apply Match Look",
   });
@@ -392,22 +393,13 @@ test("tallyMatchlook: 空 rows は全キー 0(キーの初期化を pin)", () =>
   assert.deepEqual(Object.keys(tally).sort(), ["-", "applied", "no-ref"]);
 });
 
-// notAppliedEntries は vm 側で生成した配列(要素も vm realm のオブジェクト)を返す。assertMenuCommand
-// と同じ realm 差の理由で deepEqual が FAIL する(要素だけでなく配列自体の prototype も
-// 不一致になるため空配列でも FAIL する)。Array.from を main realm(=このテストファイル)側から
-// 呼び出して配列を main realm へ写しつつ、各要素もスプレッドしてプレーンオブジェクト化する
-// (同じ回避策の配列版)。
-function assertNotAppliedEntries(actual, expected) {
-  assert.deepEqual(Array.from(actual, (entry) => ({ ...entry })), expected);
-}
-
 test("notAppliedEntries: applied を除き reason を対応づける", () => {
   const rows = [
     { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
     { target: "b.dng", jpeg: null, matchlook: "-" },
     { target: "c.dng", jpeg: "c.JPG", matchlook: "no-ref" },
   ];
-  assertNotAppliedEntries(M.notAppliedEntries(rows), [
+  assertPlainEqual(M.notAppliedEntries(rows), [
     { target: "b.dng", reason: "nojpeg" },
     { target: "c.dng", reason: "failed" },
   ]);
@@ -418,7 +410,7 @@ test("notAppliedEntries: 全件 applied なら空配列", () => {
     { target: "a.dng", jpeg: "a.JPG", matchlook: "applied" },
     { target: "b.dng", jpeg: "b.JPG", matchlook: "applied" },
   ];
-  assertNotAppliedEntries(M.notAppliedEntries(rows), []);
+  assertPlainEqual(M.notAppliedEntries(rows), []);
 });
 
 test("notAppliedEntries: 出現順を保つ", () => {
@@ -426,7 +418,7 @@ test("notAppliedEntries: 出現順を保つ", () => {
     { target: "x.dng", jpeg: "x.JPG", matchlook: "no-ref" },
     { target: "y.dng", jpeg: null, matchlook: "-" },
   ];
-  assertNotAppliedEntries(M.notAppliedEntries(rows), [
+  assertPlainEqual(M.notAppliedEntries(rows), [
     { target: "x.dng", reason: "failed" },
     { target: "y.dng", reason: "nojpeg" },
   ]);
