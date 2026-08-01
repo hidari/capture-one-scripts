@@ -1100,14 +1100,30 @@ function run(): string {
   // try の外に置かないこと(切替が throw しても finally で必ず元コレクションへ戻し HUD を閉じる)。
   try {
     ensureWorkingCollection(C1, items);
-    // variant 索引は遅延メモ化する。対象 0 件は run() が既に早期 return 済みでここへは来ないため、
-    // ここでの意味はループの都度ではなくバッチ全体で doc.variants() の全走査を 1 回に抑えること。
-    let variantIndexCache: VariantIndex | null = null;
-    const getVariantIndex = (): VariantIndex => {
-      if (variantIndexCache) return variantIndexCache;
-      variantIndexCache = buildVariantIndex(C1);
-      return variantIndexCache;
-    };
+    // variant 索引はバッチ共通資源なのでループの前に 1 回だけ構築する。対象 0 件は run() が
+    // 既に早期 return 済みなので遅延メモ化の動機は無い。
+    //
+    // 構築の失敗は個別 variant の失敗ではなく doc.variants() の読み取りそのものの失敗
+    // (権限・接続・セッション状態)なので、per-item catch の内側に置かず、ここでバッチごと
+    // 中断する。ループ内に置くと対象 N 件それぞれが同じ失敗を踏んで全件 no-ref になり、
+    // 真の原因はどこにも出ないまま「時間をおいて再実行」という無関係な助言だけが出る
+    // (実際にそうなっていた)。「一過性の失敗をその 1 件だけ degrade させる」という過去の
+    // 設計意図を、バッチ共通資源と個別 variant を別物として扱う方針へ意図的に覆す判断。
+    //
+    // この文は try の内側に置くこと。外へ出すと finally を通らず、コレクションが切替先の
+    // ままになり HUD も開いたまま残る。
+    let variantIndex: VariantIndex;
+    try {
+      variantIndex = buildVariantIndex(C1);
+    } catch (e) {
+      // 索引構築は適用ループより前なので、この時点で適用は 1 件も起きていない。載せる summary は
+      // 無いが、代わりに「適用していない」ことを明示する(Match Look ツールに残る前回の参照との
+      // 取り違えを防ぐ。noneAppliedMessage の末尾行と同じ理由)。
+      throw new Error(
+        "variant 索引を構築できません(" + String(e) + ")。" +
+          "対象 " + items.length + " 件の処理を中断しました。Match Look は適用していません。",
+      );
+    }
 
     let done = 0;
     for (const it of items) {
@@ -1116,9 +1132,8 @@ function run(): string {
       let jpegLabel: string | null = null;
       let matchlook: MatchLookStatus = "-";
       try {
-        const vi = getVariantIndex();
         // JPEG variant は対象と同じ baseName で引く(同名 import 前提)。
-        const jv = findVariantInIndex(vi, it.baseName, CONFIG.jpegExts);
+        const jv = findVariantInIndex(variantIndex, it.baseName, CONFIG.jpegExts);
         if (jv) {
           jpegLabel = String(jv.parentImage().name());
           // 対象 variant は選択時点の参照をそのまま使う(索引から引き直さない)。
