@@ -504,6 +504,74 @@ function normalizeBulkStrings(raw: unknown, expected: number): string[] | null {
   return out;
 }
 
+// コレクション N 件の文字列プロパティを読む。まず複数形アクセス(doc.collections.id() 等)で
+// 1 イベントに畳み、読めなければ per-collection の逐次読みへ落とす(一括読みが使えない
+// 環境でも候補を失わない)。読めなかった要素は空文字になる。
+function readCollectionStrings(doc: any, cols: any[], prop: string): string[] {
+  let bulk: string[] | null = null;
+  try {
+    bulk = normalizeBulkStrings(doc.collections[prop](), cols.length);
+  } catch (e) {
+    /* 一括読みが失敗したら逐次読みへ落ちる */
+  }
+  if (bulk) return bulk;
+  const out: string[] = [];
+  for (let i = 0; i < cols.length; i++) {
+    let v = "";
+    try {
+      v = String(cols[i][prop]());
+    } catch (e) {
+      /* 読めない要素は空文字のまま(候補からは外さない) */
+    }
+    out.push(v);
+  }
+  return out;
+}
+
+// 切替先コレクションの候補 1 件。collection は切替代入に使う参照、count は variant 数。
+// count の -1 は「件数を取得できなかった」番兵で、候補には残すが pickLargestIndex では
+// 選ばれない。coverage は対象と参照 JPEG が同居する件数の枠で、ここでは 0 で初期化する。
+type CollectionCandidate = {
+  collection: any;
+  id: string;
+  name: string;
+  count: number;
+  coverage: number;
+};
+
+// 切替先の候補を列挙する。ゴミ箱は言語非依存の id で除外する(大量カリング後は全画像より
+// 大きくなりうるため件数では弾けない)。件数を取得できなかった候補も残す: 除外すると
+// 全件失敗時に候補一覧が空になり、ensureWorkingCollection の throw が原因を示せなくなる。
+function collectCollectionCandidates(C1: any): CollectionCandidate[] {
+  const doc = C1.currentDocument;
+  const cols = doc.collections() as any[];
+  const ids = readCollectionStrings(doc, cols, "id");
+  const names = readCollectionStrings(doc, cols, "name");
+  const out: CollectionCandidate[] = [];
+  for (let i = 0; i < cols.length; i++) {
+    if (ids[i] === "trash") continue;
+    let count = -1;
+    try {
+      count = cols[i].variants().length;
+    } catch (e) {
+      /* 件数を取れないものは -1(候補には残すが選ばれない番兵) */
+    }
+    out.push({
+      collection: cols[i],
+      id: ids[i],
+      name: names[i] || "?",
+      count: count,
+      coverage: 0,
+    });
+  }
+  return out;
+}
+
+// 診断(describeCounts)へ渡す形へ射影する(pure)。
+function candidateEntries(candidates: CollectionCandidate[]): { label: string; count: number }[] {
+  return candidates.map((c) => ({ label: c.name, count: c.count }));
+}
+
 // 対象と JPEG を同一コレクションに揃える。variants() は current collection スコープなので、
 // 対象のコレクションだけをブラウズ中だと JPEG が載らず Match Look の参照を引けない。
 //
