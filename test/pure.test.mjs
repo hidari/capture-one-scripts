@@ -912,6 +912,26 @@ test("noneAppliedMessage: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」�
   );
 });
 
+test("noneAppliedMessage: 失敗の内容を対象一覧とガイダンスの間に入れる(重複排除)", () => {
+  const entries = [
+    { target: "a.dng", reason: "failed", detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用" },
+    { target: "b.dng", reason: "failed", detail: "メニュー項目が有効化されない: 調整 > マッチルックを適用" },
+  ];
+  // 肝: 失敗理由セクションの配線を外すと "失敗の内容:" の 2 行が消えて FAIL する(変異検出)。
+  const msg = M.noneAppliedMessage("items=2 applied=0 noref=2 nojpeg=0", entries);
+  assert.equal(
+    msg,
+    "選択した 2 件すべてに Match Look を適用できませんでした。\n" +
+      "  a.dng (適用に失敗)\n" +
+      "  b.dng (適用に失敗)\n" +
+      "失敗の内容:\n" +
+      "  メニュー項目が有効化されない: 調整 > マッチルックを適用\n" +
+      "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。\n" +
+      "Match Look ツールに前回の参照が残っている場合がありますが、このスクリプトは何も適用していません。\n" +
+      "items=2 applied=0 noref=2 nojpeg=0",
+  );
+});
+
 test("notAppliedAlertText: 適用件数と未適用件数を出す", () => {
   const entries = [{ target: "x.dng", reason: "nojpeg", detail: null }];
   assert.equal(
@@ -936,6 +956,23 @@ test("notAppliedAlertText: NOT_APPLIED_NAME_LIMIT を超えると「他 N 件」
       "  4.dng (参照 JPEG なし)\n" +
       "  5.dng (参照 JPEG なし)\n" +
       "  他 1 件",
+  );
+});
+
+test("notAppliedAlertText: 失敗の内容を対象一覧の後ろに足す", () => {
+  const entries = [
+    { target: "x.dng", reason: "failed", detail: "プレビューが生成されていません" },
+    { target: "y.dng", reason: "nojpeg", detail: null },
+  ];
+  // 肝: 失敗理由セクションの配線を外すと末尾の 2 行が消えて FAIL する(変異検出)。
+  assert.equal(
+    M.notAppliedAlertText(1, entries),
+    "1 件に適用、2 件を適用できませんでした。\n\n" +
+      "適用できなかった対象:\n" +
+      "  x.dng (適用に失敗)\n" +
+      "  y.dng (参照 JPEG なし)\n\n" +
+      "失敗の内容:\n" +
+      "  プレビューが生成されていません",
   );
 });
 
@@ -1494,7 +1531,9 @@ const INDEX_FAILURE = "Apple Event failed (-1728)";
 // run() を通すための最小 fake。既定では対象は DNG 2 件だけで同名 JPEG を置かない(ループへ
 // 入っても Match Look の実行までは行かせない)。options.withJpeg を渡すと IMG1234 の JPEG を
 // 足して 1 件だけ applied にでき、部分未適用(partial)を作れる。options.manifestFailure を
-// 渡すと追記ログの書き込みが必ず失敗する。options.indexFailure を渡すと doc.variants() が throw し、
+// 渡すと追記ログの書き込みが必ず失敗する。options.withJpegAll を渡すと IMG1234 と IMG5678 の
+// 両方に同名 JPEG が付いて 2 件とも適用ループへ進み、options.activateFailure を渡すと
+// C1.activate が指定の message で throw する。options.indexFailure を渡すと doc.variants() が throw し、
 // 索引構築の失敗を再現する(doc.variants() を呼ぶのは buildVariantIndex だけ。選択の取得と
 // 安全弁は doc.variants.whose 経由なので、この注入は索引構築だけを狙い撃ちできる)。
 // コレクションは 1 つで currentCollection と id が一致するため ensureWorkingCollection は
@@ -1506,6 +1545,13 @@ function fakeRunEnv(options = {}) {
   // IMG1234 だけに同名 JPEG を与える。selectedTargetItems は parentImage の拡張子で弾くので
   // 対象は DNG 2 件のままで、索引からは IMG1234 の JPEG だけが引ける(= 1 件だけ applied)。
   if (options.withJpeg) all.push(fakeVariant("IMG1234", "IMG1234.JPG"));
+  // options.withJpegAll: IMG1234 と IMG5678 の両方に同名 JPEG を与え、2 件とも
+  // applyMatchLook_viaMenu まで進ませる(適用失敗 detail の重複排除 pin 用)。タスク 4 の
+  // withJpeg(IMG1234 のみ = partial 用)とは意味が違うため、既存キーへ相乗りしない。
+  // JPEG を足しても selectedTargetItems は parentImage の拡張子で弾くので items は DNG 2 件のまま。
+  if (options.withJpegAll) {
+    all.push(fakeVariant("IMG1234", "IMG1234.JPG"), fakeVariant("IMG5678", "IMG5678.JPG"));
+  }
   const names = () => all.map((v) => v.name());
   const imageNames = () => all.map((v) => v.parentImage().name());
 
@@ -1547,6 +1593,10 @@ function fakeRunEnv(options = {}) {
     currentDocument: doc,
     activate: () => {
       calls.activate++;
+      // options.activateFailure: applyMatchLook_viaMenu の最初の Apple Event を失敗させる。
+      // 適用ループの per-item catch へ落ちる失敗をここ 1 点に固定できるので、detail に載る
+      // message が一意に決まる(選択やメニュークリックまで進ませない)。
+      if (options.activateFailure) throw new Error(options.activateFailure);
     },
   };
   const menuBarItems = [
@@ -1855,4 +1905,32 @@ test("run: manifest 書き込みに失敗しても未適用のダイアログを
   assert.deepEqual(Object.keys(env.written), []);
   // 適用そのものは 1 件ぶん走っている(参照セット + 適用で 2 クリック)。
   assert.equal(env.calls.menuClicks, 2);
+});
+
+// 適用失敗として注入する生のメッセージ。run() の catch が errorMessage で拾い、
+// 未適用通知へ verbatim で載ることを pin する(通知に載る前の加工を許さない)。
+const APPLY_FAILURE = "ACTIVATE_BOOM";
+
+test("run: 適用に失敗した例外 message が未適用通知へ verbatim で載る(重複は 1 行)", () => {
+  const env = fakeRunEnv({ withJpegAll: true, activateFailure: APPLY_FAILURE });
+  const err = runAndCatch(env);
+  assert.ok(err, "2 件とも適用に失敗するので none-applied で throw する");
+  const message = String(err.message);
+  // 2 件とも applyMatchLook_viaMenu まで進んだこと(JPEG が引けずスキップされたのではない)。
+  assert.equal(env.calls.activate, 2);
+  assert.match(message, /items=2 applied=0 noref=2 nojpeg=0/);
+  // 肝: run() の catch から detail = errorMessage(e); を削ると detail が null のままになり、
+  // 失敗理由セクションごと消えてここが FAIL する(変異検出)。
+  assert.ok(
+    message.indexOf("失敗の内容:\n  " + APPLY_FAILURE) >= 0,
+    "失敗理由が verbatim で載っていない: " + message,
+  );
+  // errorMessage が String(e) へ退行すると "Error: ACTIVATE_BOOM" になる。vm から見た
+  // main realm の Error でも message はそのまま読めるので、接頭辞は付かないのが正しい。
+  assert.ok(
+    message.indexOf("Error: " + APPLY_FAILURE) < 0,
+    "message ではなく String(e) が載っている: " + message,
+  );
+  // 2 件が同じ理由なので重複排除で 1 行だけになる(run() 経由の dedup pin)。
+  assert.equal(message.split(APPLY_FAILURE).length - 1, 1);
 });
