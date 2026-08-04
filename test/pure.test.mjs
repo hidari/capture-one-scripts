@@ -1514,6 +1514,17 @@ test("ensureWorkingCollection: 切替後の id が期待と違えば候補一覧
   assert.deepEqual(calls.selected, []);
 });
 
+test("ensureWorkingCollection: 着地 id が期待どおりなら throw せず select 安全弁へ進む(正の対照)", () => {
+  // 肝: 着地検証を === "mismatch" から !== "unverified" へ締めると、正しく着地したこの経路でも
+  //     throw してしまい、ここが「コレクションの切替が着地しませんでした」で FAIL する。
+  //     上の unverified テストと mismatch テストだけでは "ok" 経路を通るものが無く、この変異は
+  //     全スイート緑のまま生き残る(実機では正しく着地した実行すべてが止まる)。
+  const cols = [fakeCollection("3", "Capture", 146), fakeCollection("8", "All Images", 614)];
+  const { C1, calls } = fakeCollectionsDoc(cols, { currentId: "3", landingId: "8" });
+  M.ensureWorkingCollection(C1, [WORK_ITEM]);
+  assert.deepEqual(calls.selected, ["V_TARGET"]);
+});
+
 // ================= run() の構造テスト =================
 // run() は純粋関数ではないが、「索引構築の失敗をバッチごと中断する」という構造は
 // Capture One の fake で駆動しないと pin できない。fake は実 C1 の代替ではなく、
