@@ -553,7 +553,7 @@ function buildIndexFromBulk(
     const variant = variants[i];
     const rawName = names[i];
     const rawImageName = imageNames[i];
-    // 読めなかった要素はその添字だけ落とす(逐次読み時代の per-variant try/catch の耐性)。
+    // 読めなかった要素はその添字だけ落とす(1 要素の読み取り失敗で索引全体を失わない)。
     // 添字を詰めずに continue するため、後続の添字対応はずれない。
     if (variant == null || rawName == null || rawImageName == null) continue;
     const name = String(rawName);
@@ -573,8 +573,10 @@ function buildIndexFromBulk(
 // 読み取りは複数形アクセスの一括読み 3 本で行う(readMenuTree と同じ手口)。逐次に
 // v.name() / v.parentImage().name() を引くと 614 variants で 16 秒かかる(実機実測)。
 // 3 本が同一の件数・同一の順序で返ることは実機で確認済みで、同名衝突の先勝ちも保たれる。
-// 一括読み自体が失敗した場合のフォールバックは持たない(1 回の Apple Event が失敗する状況
-// では逐次読みも失敗するため、複雑さに見合わない)。
+// 一括読み自体が失敗した場合のフォールバックは持たない。逐次読みは上のとおり 614 variants で
+// 16 秒かかり、動いても無音の極端な速度低下になるだけなので、索引構築の失敗として中断するほうが
+// 原因が伝わる。フォールバックの採否はこのコスト比較で決める(readCollectionStrings が逐次へ
+// 落ちるのは、対象がコレクション 11 件程度で逐次読みが安価なため)。
 function buildVariantIndex(C1: any): VariantIndex {
   const doc = C1.currentDocument;
   const variants = doc.variants() as C1Variant[];
@@ -714,8 +716,9 @@ function normalizeBulkStrings(raw: unknown, expected: number): string[] | null {
 }
 
 // コレクション N 件の文字列プロパティを読む。まず複数形アクセス(doc.collections.id() 等)で
-// 1 イベントに畳み、読めなければ per-collection の逐次読みへ落とす(一括読みが使えない
-// 環境でも候補を失わない)。読めなかった要素は空文字になる。
+// 1 イベントに畳み、読めなければ per-collection の逐次読みへ落とす(一括読みが使えない環境でも
+// 候補を失わない)。フォールバックを持つ側と持たない側の判断基準は buildVariantIndex の
+// コメントにある(コスト比較)。読めなかった要素は空文字になる。
 function readCollectionStrings(doc: any, cols: any[], prop: string): string[] {
   let bulk: string[] | null = null;
   try {
@@ -1073,7 +1076,7 @@ const NOT_APPLIED_LABEL: Record<NotAppliedReason, string> = {
   failed: "適用に失敗",
 };
 
-// 上の対応表を引く(pure)。
+// 上の対応表を引く(pure)。呼び出し側が Record を直接触らず、参照点を 1 つに保つ。
 function notAppliedReasonLabel(reason: NotAppliedReason): string {
   return NOT_APPLIED_LABEL[reason];
 }
@@ -1098,9 +1101,11 @@ const NOT_APPLIED_GUIDANCE: Record<NotAppliedReason, string> = {
     "適用に失敗した対象は時間をおいて再実行してください(import 直後はプレビュー生成が終わらず失敗することがあります)。",
 };
 
-// ガイダンスを出す固定順(nojpeg → failed)。entries の出現順に依存すると選択順で文面が入れ替わり
-// テストが脆くなるため、順序は entries の並びと独立に固定する。
-const NOT_APPLIED_GUIDANCE_ORDER: NotAppliedReason[] = ["nojpeg", "failed"];
+// ガイダンスを出す固定順。entries の出現順に依存すると選択順で文面が入れ替わりテストが脆くなる
+// ため、順序は entries の並びと独立に固定する。順序の唯一の真実は NOT_APPLIED_GUIDANCE の
+// literal のキー順(ES は文字列キーの挿入順を保証する)。理由を並べた配列を別に持つと、理由が
+// 増えたとき Record 側だけがコンパイルエラーになり、配列へ足し忘れたガイダンスが無音で消える。
+const NOT_APPLIED_GUIDANCE_ORDER = Object.keys(NOT_APPLIED_GUIDANCE) as NotAppliedReason[];
 
 // entries に実際に含まれる reason のぶんだけ、対処ガイダンスを固定順で組み立てる(pure)。
 // 存在しない reason のガイダンスは出さない。noneAppliedMessage 専用にせず独立関数にしてあるのは、

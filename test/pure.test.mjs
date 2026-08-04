@@ -69,7 +69,7 @@ function fakeVariant(variantName, imageName) {
 }
 // JXA の doc.variants は「関数でもありプロパティも持つ」specifier。一括読み
 // (doc.variants.name() / doc.variants.parentImage.name())を模すため fake も同じ形にする。
-// specifier の生成は Task 9 が導入した callableSpecifier を再利用する(Function.prototype.name が
+// specifier の生成は callableSpecifier を再利用する(Function.prototype.name が
 // 非 writable であることの吸収もそちらに閉じている。specifier fake を新設しないこと)。
 // 既定は variants から名前配列を導出し、overrides で一括読みの戻り値だけを差し替えられる
 // (一括読みへの配線そのものの pin と、件数不一致の負のケースを作るため)。
@@ -522,7 +522,7 @@ test("readMenuTree: メニュー名と項目名からツリーを組む(セパ�
   ]);
   const tree = M.readMenuTree(SE);
   // 戻り値は vm realm の配列なので、外側は添字で検証し、内側は Array.from で main realm へ写す
-  // (プロトタイプ不一致で deepEqual が落ちるのを避ける。cross-realm の扱いは notes 4)。
+  // (プロトタイプ不一致で deepEqual が落ちるのを避ける。cross-realm の扱いは assertPlainEqual の定義コメントを参照)。
   assert.equal(tree.length, 2);
   assert.equal(tree[0].menu, "File");
   assert.deepEqual(Array.from(tree[0].items), ["Open…"]);
@@ -982,7 +982,7 @@ test("notAppliedAlertText: 失敗の内容を対象一覧の後ろに足す", ()
 // Function.prototype.name は非 writable なので `fn.name = ...` では置けない。このテストファイルは
 // ESM で常に strict mode なので、代入すると黙って無視されるのではなく TypeError で落ちる。
 // 必ず Object.defineProperty で置く。specifier の fake はこのヘルパ 1 本だけを通し、
-// タスク 1(fakeC1 の一括読み)とタスク 3(fakeRunEnv)もこれを再利用する(独自実装を新設しない)。
+// fakeC1 の一括読みと fakeRunEnv もこれを再利用する(独自実装を新設しない)。
 function callableSpecifier(callImpl, props) {
   const fn = (...args) => callImpl(...args);
   for (const key of Object.keys(props)) {
@@ -997,13 +997,13 @@ function callableSpecifier(callImpl, props) {
 // count が負なら variants() が throw する(件数を取得できない候補の再現)。
 // name が null なら逐次読みで name() が throw し、一括読みでは null 要素として返る。
 // variants は callableSpecifier で作る。素の関数にすると variants.name が
-// Function.prototype.name(文字列 "variants")になり、タスク 2 の readCollectionContents が
+// Function.prototype.name(文字列 "variants")になり、readCollectionContents が
 // 「読めない」のではなく「関数でない値を呼んだ TypeError」で null へ落ちる。狙って中身を
 // 読ませないのか偶然壊れているのかを区別できないので、specifier の形は正しく作る。
 // names / imageNames はコレクションの中身の一括読み(collection.variants.name() /
 // collection.variants.parentImage.name())が返す値。省略するとその 2 つは undefined を返し、
 // readCollectionContents が null を返して coverage が -1(検査失敗)になる。
-// タスク 2 の coverage 配線テストだけがこの 2 引数を渡す。
+// coverage の配線テストだけがこの 2 引数を渡す。
 function fakeCollection(id, name, count, names, imageNames) {
   const col = {
     __id: id,
@@ -1046,7 +1046,7 @@ function fakeCollectionsAccessor(cols, bulkMode) {
 //   selected     doc.variants.whose({selected:true})() が返す配列(既定 [])
 //   selectThrows doc.select が throw する(切替後の安全弁の失敗を再現)
 //   landingId    切替代入のあと doc.currentCollection() が返すコレクションの id を強制する
-//                (切替が着地しなかった環境の再現。タスク 5 の mismatch throw の pin に使う)
+//                (切替が着地しなかった環境の再現。着地検証の mismatch throw の pin に使う)
 function fakeCollectionsDoc(cols, opts = {}) {
   const calls = { selected: [], deselected: [] };
   const variants = callableSpecifier(() => [], { whose: () => () => opts.selected || [] });
@@ -1066,11 +1066,11 @@ function fakeCollectionsDoc(cols, opts = {}) {
   // 切替代入のあとは、
   //   landingId なし: 代入された値そのものを保持する(doc.currentCollection === 代入したコレクション
   //                   になるので切替代入が起きたことを直接観測できる。呼び出せないので
-  //                   タスク 5 の着地 id の読み取りは unverified になる)
+  //                   着地 id の読み取りは unverified になる)
   //   landingId あり: 呼べば landingId を返す関数を保持する(切替後に読み直した id が代入した
   //                   コレクションの id と食い違う環境の再現)
   // 素のデータプロパティ(doc.currentCollection = ...)に戻さないこと。戻すと landingId を
-  // 渡しても切替後の読み直しが常に TypeError になり、タスク 5 の mismatch 経路が 1 度も通らない。
+  // 渡しても切替後の読み直しが常に TypeError になり、着地検証の mismatch 経路が 1 度も通らない。
   let current = () => ({ id: () => String(opts.currentId || "") });
   Object.defineProperty(doc, "currentCollection", {
     get: () => current,
@@ -1249,7 +1249,7 @@ test("candidateEntries: 診断用の label / count へ射影する(-1 の候補�
 // readCollectionContents 検査用の最小 fake。この関数が使うのは複数形アクセス
 // (collection.variants.name / collection.variants.parentImage.name)だけなので、
 // 実機の specifier のように関数化する必要はない(関数にすると name が Function.name と
-// 衝突して defineProperty が要る)。タスク 9 が同名のヘルパ fakeCollection を先に定義済みの
+// 衝突して defineProperty が要る)。同名のヘルパ fakeCollection が先に定義済みの
 // ため、こちらは fakeContentsCollection と別名にする(ESM のトップレベル関数宣言が重複すると
 // SyntaxError でテストファイル全体がパースできず、全件 0 実行になる)。
 function fakeContentsCollection(names, imageNames) {
@@ -1426,9 +1426,9 @@ test("pickBestCandidateIndex: coverage が全 0 で件数も全滅なら -1(診�
 });
 
 // ensureWorkingCollection が pickBestCandidateIndex を実際に呼んでいることの配線テスト。
-// タスク 9 が callableSpecifier 化した fakeCollection の第 4 / 第 5 引数(names / imageNames)で
+// fakeCollection の第 4 / 第 5 引数(names / imageNames)で
 // その候補の一括読みが返す variant 名と parentImage 名を与える。この 2 引数を省略した候補
-// (タスク 9 の characterization テスト 4 件)は一括読みが undefined を返すので
+// (characterization テスト 4 件)は一括読みが undefined を返すので
 // readCollectionContents が null -> coverage -1 になり、件数フォールバックで従来と同じ選定になる。
 test("ensureWorkingCollection: 件数最大ではなく coverage 最大のコレクションへ切り替える", () => {
   // References 相当: 参照 JPEG だけが並ぶ大きなコレクション(294 件・対象の DNG は居ない)。
@@ -1475,7 +1475,7 @@ test("collectionSwitchVerdict: どちらかが空文字なら unverified(mismatc
 });
 
 // ============ ensureWorkingCollection への配線(collectionSwitchVerdict)============
-// fake はタスク 9 が追加した fakeCollection / fakeCollectionsDoc / WORK_ITEM をそのまま使う
+// fake は既存の fakeCollection / fakeCollectionsDoc / WORK_ITEM をそのまま使う
 // (新しい fake を作らない)。この fake はコレクションの中身を読めないので coverage は全候補で
 // 同点になり、pickBestCandidateIndex は件数フォールバックで件数最大(添字 1)を選ぶ。
 // landingId を渡さない場合、切替代入後の doc.currentCollection は代入した値そのものになり
@@ -1531,7 +1531,7 @@ test("ensureWorkingCollection: 着地 id が期待どおりなら throw せず s
 // run() が索引をいつ何回作りどこで throw するかだけを観測するための seam に絞る。
 //
 // JXA の specifier は「関数として呼べる」かつ「プロパティも持つ」(doc.variants() と
-// doc.variants.name() の両方が成立する)。その形の fake は Task 9 が導入した
+// doc.variants.name() の両方が成立する)。その形の fake は
 // callableSpecifier(callImpl, props) を使う。ここで同名の関数を再定義しないこと
 // (ESM のトップレベル関数宣言が重複すると SyntaxError になり、テストファイル全体が
 // パースできず全件 0 件実行で落ちる)。
@@ -1548,7 +1548,7 @@ const INDEX_FAILURE = "Apple Event failed (-1728)";
 // 索引構築の失敗を再現する(doc.variants() を呼ぶのは buildVariantIndex だけ。選択の取得と
 // 安全弁は doc.variants.whose 経由なので、この注入は索引構築だけを狙い撃ちできる)。
 // コレクションは 1 つで currentCollection と id が一致するため ensureWorkingCollection は
-// 早期 return する(切替と着地検証は本タスクの観測対象ではない)。
+// 早期 return する(切替と着地検証はこのテスト群の観測対象ではない)。
 function fakeRunEnv(options = {}) {
   const calls = { indexReads: 0, activate: 0, collectionRestores: 0, menuClicks: 0, alerts: [] };
   const written = {};
@@ -1557,7 +1557,7 @@ function fakeRunEnv(options = {}) {
   // 対象は DNG 2 件のままで、索引からは IMG1234 の JPEG だけが引ける(= 1 件だけ applied)。
   if (options.withJpeg) all.push(fakeVariant("IMG1234", "IMG1234.JPG"));
   // options.withJpegAll: IMG1234 と IMG5678 の両方に同名 JPEG を与え、2 件とも
-  // applyMatchLook_viaMenu まで進ませる(適用失敗 detail の重複排除 pin 用)。タスク 4 の
+  // applyMatchLook_viaMenu まで進ませる(適用失敗 detail の重複排除 pin 用)。
   // withJpeg(IMG1234 のみ = partial 用)とは意味が違うため、既存キーへ相乗りしない。
   // JPEG を足しても selectedTargetItems は parentImage の拡張子で弾くので items は DNG 2 件のまま。
   if (options.withJpegAll) {
@@ -1682,7 +1682,7 @@ test("run: 索引構築の失敗はバッチごと中断する(全件 no-ref に
   assert.ok(err, "run() が throw していない");
   const message = String(err.message);
   assert.match(message, /variant 索引を構築できません/);
-  // 生の失敗内容を落とすと真の原因が消える(この修正の主目的)。
+  // 生の失敗内容を落とすと真の原因が消える(この pin の主目的)。
   assert.ok(message.indexOf(INDEX_FAILURE) >= 0, "生の失敗内容が verbatim で載っていない");
   assert.match(message, /対象 2 件/);
   assert.match(message, /Match Look は適用していません/);
@@ -1702,10 +1702,10 @@ test("run: 索引が作れれば従来どおり適用ループへ進む(常に t
   const message = String(err.message);
   assert.ok(message.indexOf("variant 索引") < 0, "索引診断が出てはいけない");
   assert.match(message, /選択した 2 件すべてに Match Look を適用できませんでした/);
-  // noneAppliedMessage の末尾に載る summary を exact な部分文字列で pin する。Task 8 が入れた
+  // noneAppliedMessage の末尾に載る summary を exact な部分文字列で pin する。
   // formatSummary(items.length, tally.applied, tally["no-ref"], tally["-"]) の第 3・第 4 引数を
   // 取り違えると noref と nojpeg が入れ替わってここが赤になる(fake の 2 件は同名 JPEG が
-  // 無いので nojpeg=2 / noref=0 が正)。この 1 行が Task 8 の配線 pin を兼ねる。
+  // 無いので nojpeg=2 / noref=0 が正)。この 1 行が summary 配線の pin を兼ねる。
   assert.ok(message.indexOf("items=2 applied=0 noref=0 nojpeg=2") >= 0, "summary の内訳が違う");
   assert.equal(env.calls.indexReads, 1);
   assert.deepEqual(Object.keys(env.written), ["/S/Output/matchlook_pairs.tsv"]);
@@ -1818,8 +1818,8 @@ test("finishRun: 部分未適用 + manifest 失敗はダイアログを出して
   const msg = messageOfThrow(() =>
     M.finishRun("SUMMARY", FINISH_PARTIAL_ROWS, "Error: boom", makeNotify(events)),
   );
-  // 肝: manifest 例外を帰結判定より先に投げる実装(現行 run() の形)へ戻すと notify が
-  // 呼ばれず events が空になり FAIL する(変異検出)。これが本タスクの中心の pin。
+  // 肝: manifest 例外を帰結判定より先に投げる実装へ戻すと notify が呼ばれず events が
+  // 空になり FAIL する(変異検出)。これがこのテストの中心の pin。
   assert.deepEqual(events, [FINISH_PARTIAL_ALERT]);
   assert.equal(msg, "SUMMARY\nmanifest 書き込み失敗: Error: boom");
 });
@@ -1885,7 +1885,7 @@ test("appendManifestOrError: 書き込みに失敗しても throw せず例外�
   const Mb = loadModule(makeManifestBridge(store, { failWrite: true }), ["appendManifestOrError"]);
   const rows = [{ target: "a.dng", jpeg: null, matchlook: "-" }];
   // 肝: try/catch を外して appendManifest を素通しにすると、ここが assert ではなく
-  // 例外で FAIL する(変異検出)。「投げずに保持する」が本タスクの前提。
+  // 例外で FAIL する(変異検出)。「投げずに保持する」が appendManifestOrError の契約。
   const detail = Mb.appendManifestOrError("/S", "T", rows);
   assert.equal(typeof detail, "string");
   // withManifestFailure の空文字 pin が防御的である根拠(実経路の detail は常に非空)。
