@@ -1295,7 +1295,7 @@ function run(): string {
           applyMatchLook_viaMenu(C1, SE, menuCmds, jv, it.variant, (phase) => hudSetPhase(hud, done, phase));
           matchlook = "applied";
         }
-        // JPEG が見つからなければ matchlook は初期値 "-" のまま(集計時に nojpeg 扱い)。
+        // JPEG が見つからなければ matchlook は初期値 "-" のまま(理由への写像は MATCHLOOK_REASON)。
       } catch (e) {
         matchlook = "no-ref";
         // 失敗理由は未適用通知にだけ載せる(追記ログの TSV スキーマは変えない)。
@@ -1308,7 +1308,8 @@ function run(): string {
     // 追記ログと集計は行だけを見る(detail は TSV へ出さない)。
     const rows = outcomes.map((o) => o.row);
 
-    // カウンタは rows(唯一の真実)から導出する。ループ中に別変数で数えると乖離しうる。
+    // カウンタは outcomes の射影である rows から導出する(唯一の真実は outcomes)。
+    // ループ中に別変数で数えると乖離しうる。
     // 状態ごとの排他集計は tallyMatchlook に閉じる(キーの過不足は Record が型で捕まえる)。
     const tally = tallyMatchlook(rows);
 
