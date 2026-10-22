@@ -17,3 +17,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bunx tsc --noEmit -p tsconfig.json
+      # .pre-commit-config.yaml の構文と schema を検査する。壊れていると pre-commit が起動せず、
+      # 漏洩検査の hook が黙って走らなくなる
+      - run: pipx run pre-commit==4.7.0 validate-config

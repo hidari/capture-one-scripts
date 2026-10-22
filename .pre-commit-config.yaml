@@ -1,0 +1,17 @@
+# pre-commit 設定
+# staged 差分の漏洩を gitleaks で弾く。検出集合の正本は .gitleaks.toml (dotfiles の写し)。
+# gitleaks と pre-commit は Homebrew から入れたものを PATH から起動する。
+#
+# default_stages を pre-commit へ固定するのは、stages を書かない hook が既定で全 stage に
+# 載るため。放っておくと gitleaks が commit-msg や pre-push でも重ねて起動する。
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (leak guard)
+        language: system
+        entry: gitleaks git --staged --redact --no-banner -c .gitleaks.toml
+        pass_filenames: false
+        always_run: true
