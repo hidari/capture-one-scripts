@@ -25,6 +25,8 @@ pkf run test       # run the pure-logic unit tests (node --test)
 
 Build outputs land in `src/dist/` (git-ignored).
 
+Commits are scanned for leaked secrets and personal data by [gitleaks](https://github.com/gitleaks/gitleaks) through [pre-commit](https://pre-commit.com/). Install both (for example with Homebrew) and run `pre-commit install` once after cloning.
+
 ## Usage
 
 Run with Capture One open, the RAW target selected in the browser, and its creative-look JPEG already imported somewhere in the same session.

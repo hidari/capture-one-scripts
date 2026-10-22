@@ -1,0 +1,59 @@
+# gitleaks 設定
+# 既定の secret 検出ルールを継承しつつ、PII 検出の custom ルールを重ねる。
+# 個々のルールが何を見るかは各 [[rules]] の description が正本なので、ここでは
+# 列挙しない。
+#
+# 正本は dotfiles リポジトリの .gitleaks.toml で、PUBLIC リポジトリには同一内容の写しを置く。
+# 変更は dotfiles 側で行い、写しへ配り直すこと。写しとの乖離は内容の一致で判定できる。
+# PRIVATE リポジトリには PII のルールを当てず、gitleaks の既定ルールだけを持つ設定を置く。
+# 呼び出し元はこのファイルを置いたリポジトリ側が持つ。pre-commit から呼ぶか CI から
+# 呼ぶかはリポジトリごとに違うので、ここでは所在を断定しない。
+title = "hidari shared gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "macos-user-path"
+description = "macOS のローカルユーザー名を含む絶対パス (/Users/<name>) の漏洩"
+regex = '''/Users/[a-z_][a-z0-9._-]*'''
+tags = ["pii", "path"]
+
+  # placeholder / 共有・CI 用のユーザー名は許可する。
+  # 境界 ([/"]|$) で許可語をそこで終わらせ、/Users/user (許可) と /Users/userfoo (検出) を
+  # 区別する。境界に . を含めない: 含めると許可語で始まるだけの別名 (user.smith 等) が
+  # 丸ごと通り、実在しうる名前を素通りさせる。
+  [[rules.allowlists]]
+  description = "placeholder / 共有・CI 用パスは許可"
+  # secret==match (capture group 無し) だが、境界判定の意図を明示するため match を指定
+  regexTarget = "match"
+  regexes = [
+    '''/Users/(example|user|username|runner|shared)([/"]|$)''',
+  ]
+
+[[rules]]
+id = "email-address"
+description = "メールアドレスの漏洩"
+regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'''
+tags = ["pii", "email"]
+
+  # 許可は 2 軸ある。ドメイン軸で文書用の例示アドレスを、SSH clone URL 軸で git@ を通す。
+  # 見る対象が違う (前者はマッチ部分、後者は行全体) ため allowlist を 2 つに分ける。
+  # ここを狭めすぎると、追跡下に既にある例示アドレスを含む行を触るたびに赤くなる。
+
+  [[rules.allowlists]]
+  description = "文書用の例示ドメインは許可"
+  regexTarget = "match"
+  regexes = [
+    '''@example\.(com|org|net)$''',
+  ]
+
+  # git@ をローカルパートだけで通すと、SSH URL でない任意のホスト名 (社内ホスト等) まで
+  # 許可される。clone URL は git@<host>:<path> の形を取るので、コロンとパスの存在を
+  # 行全体で確認してから許可する。マッチ部分にはコロン以降が含まれないので line が要る。
+  [[rules.allowlists]]
+  description = "SSH clone URL の git@ は許可"
+  regexTarget = "line"
+  regexes = [
+    '''\bgit@[A-Za-z0-9.-]+:[A-Za-z0-9._/~-]''',
+  ]
